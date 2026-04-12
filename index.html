@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Yahtzee">
+<title>Yahtzee</title>
+<style>
+:root{
+  --max-rolls:3;--upper-bonus-score:35;--upper-bonus-target:63;
+  --bg:#1a1a2e;--surface:#16213e;--accent:#e94560;--accent2:#f5a623;
+  --text:#eaeaea;--muted:#7a8499;--green:#40916c;--radius:10px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden}
+body{font-family:-apple-system,'SF Pro Display','Helvetica Neue',sans-serif;background:var(--bg);color:var(--text)}
+
+.app{
+  display:flex;flex-direction:column;
+  height:100vh;height:-webkit-fill-available;
+  max-width:430px;margin:0 auto;
+  padding:env(safe-area-inset-top,4px) 8px env(safe-area-inset-bottom,2px);
+  gap:4px;
+}
+
+/* Header */
+.header{display:flex;align-items:center;justify-content:space-between;padding:0 2px;flex-shrink:0}
+.header h1{font-size:20px;font-weight:700;color:var(--accent);letter-spacing:-.4px}
+.total-wrap{text-align:right}
+.total-wrap .lbl{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.total-wrap .val{font-size:20px;font-weight:700;line-height:1}
+
+/* Main row */
+.main-row{display:flex;gap:5px;flex:1;min-height:0}
+/* swap: dice right */
+.main-row.swapped{flex-direction:row-reverse}
+
+/* ── Dice panel ── */
+.dice-panel{
+  width:72px;flex-shrink:0;
+  background:var(--surface);border-radius:var(--radius);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:6px 5px;
+}
+.die-slot{width:60px;height:58px;position:relative;flex-shrink:0;display:flex;align-items:center;justify-content:center;margin:1px 0}
+.die-wrap{width:56px;height:56px;cursor:pointer;position:relative;user-select:none;-webkit-user-select:none;transition:transform .1s}
+.die-wrap:active{transform:scale(.86)}
+.die-wrap.rolling{animation:dr .3s ease}
+@keyframes dr{0%{transform:rotate(0) scale(1)}25%{transform:rotate(-15deg) scale(.83)}75%{transform:rotate(13deg) scale(.83)}100%{transform:rotate(0) scale(1)}}
+.held-ring{position:absolute;inset:-2px;border-radius:12px;border:2px solid #40916c;pointer-events:none}
+.dice-controls{margin-top:4px;width:100%;display:flex;flex-direction:column;align-items:center;gap:4px}
+.pips{display:flex;gap:3px}
+.pip{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.14);transition:background .2s}
+.pip.on{background:var(--accent)}
+.btn-roll{
+  background:var(--accent);color:#fff;border:none;border-radius:7px;
+  padding:7px 0;width:100%;font-size:13px;font-weight:600;
+  cursor:pointer;-webkit-appearance:none;transition:transform .1s,opacity .15s;
+}
+.btn-roll:active{transform:scale(.93)}
+.btn-roll:disabled{opacity:.32;cursor:default}
+
+/* ── Scores panel ── */
+.scores-panel{flex:1;min-width:0;background:var(--surface);border-radius:var(--radius);display:flex;flex-direction:column;overflow:hidden}
+.sec-header{display:flex;align-items:center;justify-content:space-between;padding:2px 6px;background:rgba(0,0,0,.22);flex-shrink:0;gap:4px}
+.sec-lbl{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
+.hdr-btns{display:flex;gap:4px}
+.btn-sm{background:rgba(255,255,255,.1);color:var(--text);border:none;border-radius:5px;padding:2px 7px;font-size:10px;font-weight:600;cursor:pointer;-webkit-appearance:none;white-space:nowrap}
+.btn-sm:active{background:rgba(255,255,255,.2)}
+
+.scores-list{flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0}
+
+/* Score rows */
+.score-row{
+  display:flex;align-items:center;
+  padding:0 6px;gap:3px;
+  border-bottom:1px solid rgba(0,0,0,.2);
+  cursor:default;
+  flex:1;min-height:0;max-height:36px;
+  position:relative;overflow:hidden;
+}
+.score-row.clickable{cursor:pointer}
+.score-row.clickable:active{filter:brightness(1.18)}
+.score-row.used{cursor:default;background:#0d0f1a !important;}
+.score-row.used .s-name{color:rgba(255,255,255,.38)}
+.score-row.used .s-val{color:rgba(200,185,80,.65);text-shadow:none}
+.s-name{
+  flex:1;font-size:11px;font-weight:500;
+  color:rgba(255,255,255,.88);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  position:relative;z-index:1;
+  text-shadow:0 1px 4px rgba(0,0,0,.7);
+}
+.s-val{
+  font-size:14px;font-weight:700;
+  min-width:22px;text-align:right;
+  position:relative;z-index:1;
+  text-shadow:0 1px 4px rgba(0,0,0,.8);
+  line-height:1;
+}
+.sv-blank{color:rgba(255,255,255,.3)}
+.sv-zero{color:rgba(255,255,255,.3)}
+.sv-scored{color:rgba(200,185,80,.7)}
+.sv-avail{color:#fff}
+.sv-certain{color:#74c69d}
+
+/* Section divider */
+.sec-divider{display:flex;align-items:center;padding:1px 7px;background:rgba(0,0,0,.25);flex-shrink:0;border-top:1px solid rgba(255,255,255,.04)}
+.sec-divider .sec-lbl{color:var(--muted)}
+
+/* Bonus row */
+.bonus-row-inner{display:flex;align-items:center;gap:4px;padding:1px 7px;border-bottom:1px solid rgba(0,0,0,.2);flex-shrink:0;background:rgba(0,0,0,.12)}
+.bonus-lbl{font-size:9px;color:var(--muted);white-space:nowrap}
+.bonus-bar-bg{flex:1;height:9px;background:rgba(255,255,255,.1);border-radius:5px;overflow:hidden}
+.bonus-bar-fill{height:100%;background:linear-gradient(90deg,#2d8a5e,#7ab648,#f5a623);border-radius:5px;transition:width .4s}
+.bonus-amt{font-size:15px;font-weight:700;color:var(--text);white-space:nowrap;line-height:1}
+
+/* Footer */
+.footer{display:flex;gap:5px;flex-shrink:0}
+.btn-new{flex:1;background:rgba(255,255,255,.07);color:var(--text);border:none;border-radius:8px;padding:6px;font-size:13px;font-weight:500;cursor:pointer;-webkit-appearance:none}
+.btn-new:active{background:rgba(255,255,255,.13)}
+.btn-hist{background:rgba(255,255,255,.07);color:var(--text);border:none;border-radius:8px;padding:6px 12px;font-size:13px;cursor:pointer;-webkit-appearance:none;white-space:nowrap}
+.btn-hist:active{background:rgba(255,255,255,.13)}
+
+/* Overlays */
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.82);align-items:center;justify-content:center;z-index:100;padding:24px}
+.overlay.show{display:flex}
+.ov-card{background:var(--surface);border-radius:18px;padding:24px 20px;text-align:center;width:100%;max-width:300px}
+.ov-title{font-size:24px;font-weight:700;color:var(--accent);margin-bottom:4px}
+.ov-score{font-size:50px;font-weight:700;margin-bottom:2px}
+.ov-sub{font-size:13px;color:var(--muted);margin-bottom:5px}
+.ov-rank{font-size:13px;color:var(--accent2);margin-bottom:18px;min-height:16px}
+.ov-btns{display:flex;gap:8px}
+.ov-btn{flex:1;border:none;border-radius:10px;padding:11px;font-size:14px;font-weight:600;cursor:pointer;-webkit-appearance:none}
+.ov-btn.primary{background:var(--accent);color:#fff}
+.ov-btn.secondary{background:rgba(255,255,255,.1);color:var(--text)}
+
+.hist-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:200;flex-direction:column;padding:env(safe-area-inset-top,14px) 0 env(safe-area-inset-bottom,14px)}
+.hist-overlay.show{display:flex}
+.hist-header{display:flex;align-items:center;justify-content:space-between;padding:0 16px 10px}
+.hist-title{font-size:17px;font-weight:700}
+.hist-close{background:rgba(255,255,255,.1);border:none;color:var(--text);border-radius:8px;padding:5px 12px;font-size:13px;cursor:pointer;-webkit-appearance:none}
+.hist-stats{display:flex;gap:6px;padding:0 16px 12px}
+.stat-box{flex:1;text-align:center;padding:7px 4px;background:rgba(255,255,255,.05);border-radius:8px}
+.stat-val{font-size:17px;font-weight:700}
+.stat-lbl{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-top:2px}
+.hist-chart-wrap{flex:1;padding:0 12px;overflow:hidden;position:relative}
+.hist-empty{display:flex;align-items:center;justify-content:center;height:100%;font-size:14px;color:var(--muted)}
+.hist-clear{margin:8px 16px 0;background:rgba(233,69,96,.15);color:#ff7096;border:none;border-radius:8px;padding:9px;font-size:12px;cursor:pointer;-webkit-appearance:none;width:calc(100% - 32px)}
+.hist-clear:active{background:rgba(233,69,96,.28)}
+.ver-toggle{margin:8px 16px 0;background:none;border:none;color:rgba(255,255,255,.2);font-size:10px;cursor:pointer;-webkit-appearance:none;text-align:left;padding:2px 0;letter-spacing:.03em}
+.ver-toggle:active{color:rgba(255,255,255,.4)}
+.ver-log{margin:0 16px;overflow:hidden;transition:max-height .3s ease}
+.ver-log.hidden{max-height:0}
+.ver-log.visible{max-height:400px}
+.ver-entry{padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+.ver-entry:last-child{border-bottom:none}
+.ver-num{font-size:10px;font-weight:700;color:rgba(255,255,255,.4);margin-bottom:2px}
+.ver-note{font-size:10px;color:rgba(255,255,255,.22);line-height:1.5}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <h1>Yahtzee</h1>
+    <div class="total-wrap"><div class="lbl">Score</div><div class="val" id="total">0</div></div>
+  </div>
+  <div class="main-row" id="main-row">
+    <div class="dice-panel" id="dice-panel"></div>
+    <div class="scores-panel">
+      <div class="sec-header">
+        <span class="sec-lbl">Upper</span>
+        <div class="hdr-btns">
+          <button class="btn-sm" id="btn-toggle" onclick="toggleSection()">− Lower</button>
+          <button class="btn-sm" onclick="swapSides()">⇄</button>
+        </div>
+      </div>
+      <div class="scores-list" id="scores-list"></div>
+    </div>
+  </div>
+  <div class="footer">
+    <button class="btn-new" onclick="newGame()">New game</button>
+    <button class="btn-hist" onclick="showHistory()">History</button>
+  </div>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="ov-card">
+    <div class="ov-title">Game over!</div>
+    <div class="ov-score" id="final-score">0</div>
+    <div class="ov-sub">Final score</div>
+    <div class="ov-rank" id="ov-rank"></div>
+    <div class="ov-btns">
+      <button class="ov-btn secondary" onclick="showHistoryFromOverlay()">History</button>
+      <button class="ov-btn primary" onclick="newGame()">Play again</button>
+    </div>
+  </div>
+</div>
+
+<div class="hist-overlay" id="hist-overlay">
+  <div class="hist-header">
+    <div class="hist-title">Score history</div>
+    <button class="hist-close" onclick="closeHistory()">Done</button>
+  </div>
+  <div class="hist-stats" id="hist-stats"></div>
+  <div class="hist-chart-wrap" id="hist-chart-wrap"></div>
+  <button class="hist-clear" onclick="clearHistory()">Clear history</button>
+  <button class="ver-toggle" id="ver-toggle" onclick="toggleVerLog()">version history</button>
+  <div class="ver-log hidden" id="ver-log"></div>
+</div>
+
+<script>
+// ── Categories ───────────────────────────────────────────────
+var UPPER_CATS=[
+  {id:'ones',  name:'Ones',        fn:function(d){return sA(d.filter(function(v){return v===1}))}},
+  {id:'twos',  name:'Twos',        fn:function(d){return sA(d.filter(function(v){return v===2}))}},
+  {id:'threes',name:'Threes',      fn:function(d){return sA(d.filter(function(v){return v===3}))}},
+  {id:'fours', name:'Fours',       fn:function(d){return sA(d.filter(function(v){return v===4}))}},
+  {id:'fives', name:'Fives',       fn:function(d){return sA(d.filter(function(v){return v===5}))}},
+  {id:'sixes', name:'Sixes',       fn:function(d){return sA(d.filter(function(v){return v===6}))}},
+];
+var LOWER_CATS=[
+  {id:'3k',name:'3 of a kind',fn:function(d){return hasCt(d,3)?sA(d):0}},
+  {id:'4k',name:'4 of a kind',fn:function(d){return hasCt(d,4)?sA(d):0}},
+  {id:'fh',name:'Full house', fn:function(d){var v=Object.values(cm(d)).sort();return v.length===2&&v[0]===2?25:0}},
+  {id:'ss',name:'Sm. straight',fn:function(d){return hasSeq(d,4)?30:0}},
+  {id:'ls',name:'Lg. straight',fn:function(d){return hasSeq(d,5)?40:0}},
+  {id:'yh',name:'Yahtzee!',   fn:function(d){return Object.values(cm(d)).length===1?50:0}},
+  {id:'ch',name:'Chance',     fn:function(d){return sA(d)}},
+];
+
+// ── Helpers ──────────────────────────────────────────────────
+function sA(a){return a.length?a.reduce(function(x,y){return x+y},0):0}
+function cm(d){var c={};d.forEach(function(v){c[v]=(c[v]||0)+1});return c}
+function hasCt(d,n){return Object.values(cm(d)).some(function(v){return v>=n})}
+function hasSeq(d,n){
+  var u=[];d.forEach(function(v){if(u.indexOf(v)<0)u.push(v)});u.sort(function(a,b){return a-b});
+  for(var i=0;i<=u.length-n;i++){var ok=true;for(var j=1;j<n;j++)if(u[i+j]!==u[i]+j){ok=false;break}if(ok)return true}
+  return false;
+}
+function rnd(){return Math.ceil(Math.random()*6)}
+function clamp01(x){return x<0?0:x>1?1:x}
+
+// ── SVG dice ─────────────────────────────────────────────────
+var PIPS={
+  1:[[.5,.5]],2:[[.27,.27],[.73,.73]],3:[[.27,.27],[.5,.5],[.73,.73]],
+  4:[[.27,.27],[.73,.27],[.27,.73],[.73,.73]],
+  5:[[.27,.27],[.73,.27],[.5,.5],[.27,.73],[.73,.73]],
+  6:[[.27,.22],[.73,.22],[.27,.5],[.73,.5],[.27,.78],[.73,.78]]
+};
+function makeDie(v,isHeld,empty){
+  var S=56,r=9,sw=1.5;
+  var face=isHeld?'#183d2c':'#f2ead8',stroke=isHeld?'#40916c':'#b8ac8e',pip=isHeld?'#74c69d':'#2a2040',op=empty?.2:1;
+  var ps=(PIPS[v]||[]).map(function(xy){return '<circle cx="'+(xy[0]*S).toFixed(1)+'" cy="'+(xy[1]*S).toFixed(1)+'" r="4.5" fill="'+pip+'"/>'}).join('');
+  return '<svg width="'+S+'" height="'+S+'" viewBox="0 0 '+S+' '+S+'" xmlns="http://www.w3.org/2000/svg" style="display:block;opacity:'+op+'"><rect x="'+(sw/2)+'" y="'+(sw/2)+'" width="'+(S-sw)+'" height="'+(S-sw)+'" rx="'+r+'" fill="'+face+'" stroke="'+stroke+'" stroke-width="'+sw+'"/>'+ps+'</svg>';
+}
+
+// ── State ────────────────────────────────────────────────────
+var MAX_ROLLS,UPPER_TARGET,UPPER_BONUS;
+var dice,held,rollCount,scores,rolling;
+var showBoth=true;
+var diceRight=false;
+var yahtzeeBonus=0;
+var gameOver=false;
+
+// ── Dice ordering ─────────────────────────────────────────────
+function detectIntent(){
+  var hv=[];for(var i=0;i<5;i++)if(held[i])hv.push(dice[i]);
+  if(!hv.length)return'none';
+  var u=[];hv.forEach(function(v){if(u.indexOf(v)<0)u.push(v)});u.sort(function(a,b){return a-b});
+  var maxRun=1,run=1;
+  for(var i=1;i<u.length;i++){if(u[i]===u[i-1]+1)run++;else run=1;if(run>maxRun)maxRun=run}
+  if(u.length===hv.length&&maxRun>=2)return'straight';
+  var vk=Object.keys(cm(hv));
+  if(vk.length===1)return'upper';
+  if(vk.length===2)return'pairs';
+  return'upper';
+}
+
+function orderedDiceSlots(){
+  var hv=[],fv=[],hoi=[],foi=[];
+  for(var i=0;i<5;i++){if(held[i]){hv.push(dice[i]);hoi.push(i)}else{fv.push(dice[i]);foi.push(i)}}
+  if(!hv.length)return{slots:dice.slice(),heldSlots:[false,false,false,false,false],origIdx:[0,1,2,3,4]};
+  var intent=detectIntent();
+  var slots=[0,0,0,0,0],hs=[false,false,false,false,false],oi=[-1,-1,-1,-1,-1];
+
+  if(intent==='straight'){
+    var hset={};hv.forEach(function(v){hset[v]=true});
+    var ranges=[[1,2,3,4,5],[2,3,4,5,6],[1,2,3,4],[2,3,4,5],[3,4,5,6]];
+    function cntIn(r){var n=0;r.forEach(function(v){if(hset[v])n++});return n}
+    var best=ranges[0],bestN=cntIn(ranges[0]);
+    for(var ri=1;ri<ranges.length;ri++){var cn=cntIn(ranges[ri]);if(cn>bestN){bestN=cn;best=ranges[ri]}}
+    while(best.length<5)best.push(0);
+    var hp=[];for(var i=0;i<5;i++)if(held[i])hp.push({v:dice[i],oi:i});
+    var fp=fv.slice(),fp_oi=foi.slice(),fpPtr=0;
+    for(var s=0;s<5;s++){
+      var t=best[s];
+      if(t===0){if(fpPtr<fp.length){slots[s]=fp[fpPtr];hs[s]=false;oi[s]=fp_oi[fpPtr];fpPtr++}continue}
+      var fi=-1;for(var h=0;h<hp.length;h++)if(hp[h].v===t){fi=h;break}
+      if(fi>=0){slots[s]=t;hs[s]=true;oi[s]=hp[fi].oi;hp.splice(fi,1)}
+    }
+    for(var s=0;s<5;s++)if(oi[s]===-1&&fpPtr<fp.length){slots[s]=fp[fpPtr];hs[s]=false;oi[s]=fp_oi[fpPtr];fpPtr++}
+    return{slots:slots,heldSlots:hs,origIdx:oi};
+  }
+
+  if(intent==='pairs'){
+    var c2=cm(hv),grp=Object.keys(c2).map(function(v){return{v:+v,n:c2[v]}}).sort(function(a,b){return b.n-a.n}),pos=0;
+    for(var g=0;g<grp.length;g++){var gv=grp[g].v;for(var i=0;i<5;i++)if(held[i]&&dice[i]===gv&&pos<5){slots[pos]=dice[i];hs[pos]=true;oi[pos]=i;pos++}}
+    for(var i=0;i<fv.length;i++)if(pos<5){slots[pos]=fv[i];hs[pos]=false;oi[pos]=foi[i];pos++}
+    return{slots:slots,heldSlots:hs,origIdx:oi};
+  }
+
+  // default: held top
+  var pos=0;
+  for(var i=0;i<5;i++)if(held[i]){slots[pos]=dice[i];hs[pos]=true;oi[pos]=i;pos++}
+  for(var i=0;i<fv.length;i++){slots[pos]=fv[i];hs[pos]=false;oi[pos]=foi[i];pos++}
+  return{slots:slots,heldSlots:hs,origIdx:oi};
+}
+
+// ── Probability engine ────────────────────────────────────────
+// Core idea:
+//   YELLOW bar = held-aware odds: dice[i] where held[i]=true are LOCKED, only free dice roll
+//   GREEN bar  = held-blind odds: ALL dice are treated as free (ignore held state)
+//
+// Upper section: goal = get to 3+ of targetNum
+//   held-aware: count already-held matching dice, simulate rolling free dice
+//   held-blind: ignore held, simulate all 5 dice freely
+//
+// Lower section: goal = category scores > 0 (chance: sum >= 17)
+//   held-aware: locked dice stay, simulate free dice with smart-hold between rolls
+//   held-blind: all 5 dice free each simulation, smart-hold between rolls
+//
+// rollsLeft = MAX_ROLLS - rollCount (remaining rolls to use)
+
+var SIM=5000;
+
+// ── Upper: held-aware ──
+function pUpperHeld(num,rl){
+  // count locked matching dice
+  var locked=0;for(var i=0;i<5;i++)if(held[i]&&dice[i]===num)locked++;
+  if(locked>=3)return 1;
+  if(rl===0){
+    // no more rolls — score is what it is right now
+    var cur=0;for(var i=0;i<5;i++)if(dice[i]===num)cur++;return cur>=3?1:0;
+  }
+  var freeCount=0;for(var i=0;i<5;i++)if(!held[i])freeCount++;
+  var hits=0;
+  for(var r=0;r<SIM;r++){
+    var matched=locked,free=freeCount;
+    for(var roll=0;roll<rl;roll++){
+      // roll free dice, keep ones that match
+      var nm=0;for(var d=0;d<free;d++)if(rnd()===num)nm++;
+      matched+=nm;
+      if(matched>=3){hits++;break}
+      free=5-matched; // hold all matched going forward
+    }
+  }
+  return hits/SIM;
+}
+
+// ── Upper: held-blind ──
+// Start from current dice values; ignore held state; optimally hold matching dice between rolls.
+// Green bar = "given what's showing, best odds if I rerolled freely"
+function pUpperFree(num,rl){
+  var startMatch=0;for(var i=0;i<5;i++)if(dice[i]===num)startMatch++;
+  if(startMatch>=3)return 1;
+  if(rl===0)return 0;
+  var startFree=5-startMatch; // non-matching dice we can reroll
+  var hits=0;
+  for(var r=0;r<SIM;r++){
+    var matched=startMatch,free=startFree;
+    for(var roll=0;roll<rl;roll++){
+      var nm=0;for(var d=0;d<free;d++)if(rnd()===num)nm++;
+      matched+=nm;
+      if(matched>=3){hits++;break}
+      free=5-matched; // hold all matched, reroll rest
+    }
+  }
+  return hits/SIM;
+}
+
+// ── Lower: held-aware ──
+// Locked dice (held[i]=true) stay fixed. Smart-hold applied to free dice between rolls.
+// Yellow bar = "given my selection, what are my odds"
+function pLowerHeld(catId,rl){
+  var cat=findCat(catId);
+  var goal=(catId==='ch')?function(d){return sA(d)>=17}:function(d){return cat.fn(d)>0};
+  if(goal(dice))return 1;
+  if(rl===0)return 0;
+  var hits=0;
+  for(var r=0;r<SIM;r++){
+    var cur=dice.slice(),hm=held.slice();
+    for(var roll=0;roll<rl;roll++){
+      for(var i=0;i<5;i++)if(!hm[i])cur[i]=rnd();
+      if(goal(cur)){hits++;break}
+      if(roll<rl-1){
+        var sh=smartHold(cur,catId);
+        for(var i=0;i<5;i++)if(!hm[i])hm[i]=sh[i]; // smart-hold on free dice only
+      }
+    }
+  }
+  return hits/SIM;
+}
+
+// ── Lower: held-blind ──
+// Start from current dice; treat all as rerollable; smart-hold optimally between rolls.
+// Green bar = "given what's showing, best odds if I rerolled freely"
+function pLowerFree(catId,rl){
+  var cat=findCat(catId);
+  var goal=(catId==='ch')?function(d){return sA(d)>=17}:function(d){return cat.fn(d)>0};
+  if(goal(dice))return 1; // already there
+  if(rl===0)return 0;
+  var hits=0;
+  for(var r=0;r<SIM;r++){
+    // start from current dice, nothing locked
+    var cur=dice.slice();
+    // apply smart-hold to current dice, reroll free ones (first roll)
+    var hm=smartHold(cur,catId);
+    for(var i=0;i<5;i++)if(!hm[i])cur[i]=rnd();
+    if(goal(cur)){hits++;continue}
+    for(var roll=1;roll<rl;roll++){
+      hm=smartHold(cur,catId);
+      for(var i=0;i<5;i++)if(!hm[i])cur[i]=rnd();
+      if(goal(cur)){hits++;break}
+    }
+  }
+  return hits/SIM;
+}
+
+function findCat(id){
+  for(var i=0;i<LOWER_CATS.length;i++)if(LOWER_CATS[i].id===id)return LOWER_CATS[i];
+  return null;
+}
+
+function smartHold(d,catId){
+  var c=cm(d),sv=Object.keys(c).map(function(v){return{v:+v,n:c[v]}}).sort(function(a,b){return b.n-a.n});
+  if(catId==='3k'||catId==='4k'||catId==='yh'){var t=sv[0].v;return d.map(function(v){return v===t})}
+  if(catId==='fh'){
+    if(sv.length>=2){var k=[sv[0].v,sv[1].v];return d.map(function(v){return k.indexOf(v)>=0})}
+    return d.map(function(){return false});
+  }
+  if(catId==='ss'||catId==='ls'){
+    var u=[];d.forEach(function(v){if(u.indexOf(v)<0)u.push(v)});u.sort(function(a,b){return a-b});
+    var best=[u[0]],run=[u[0]];
+    for(var i=1;i<u.length;i++){if(u[i]===u[i-1]+1)run.push(u[i]);else run=[u[i]];if(run.length>best.length)best=run.slice()}
+    return d.map(function(v){return best.indexOf(v)>=0});
+  }
+  if(catId==='ch'){
+    // for chance, hold the highest dice
+    var sorted=d.slice().sort(function(a,b){return b-a});
+    var threshold=sorted[2]; // keep top 3
+    var kept=0;return d.map(function(v){if(v>=threshold&&kept<3){kept++;return true}return false});
+  }
+  return d.map(function(){return false});
+}
+
+// ── Row background builder ─────────────────────────────────────
+// Used rows: gray bar = actual score / (3 * targetNum) for upper, or max-based for lower
+// Unrolled: flat surface
+// Rolled: green bar = free odds width, yellow bar = held odds width (overlaid)
+
+var COL_SURFACE='#16213e';
+var COL_SURFACE_END='#12193a';
+var COL_GRAY_BAR='rgba(110,110,130,.6)';
+var COL_GRAY_FADE='rgba(60,60,75,.3)';
+var COL_GREEN='rgba(35,130,70,.62)';
+var COL_YELLOW='rgba(190,150,15,.72)';
+
+function rowBg(isUsed,isUpper,targetNum,catId,rl){
+  if(isUsed){
+    // Gray bar: actual score / target
+    var actual=scores[isUpper?catId:catId]||0;
+    if(isUpper){
+      // target = 3 * face value
+      var target=targetNum*3;
+      var pct=clamp01(actual/target)*100;
+      if(pct<=0)return COL_SURFACE;
+      var gEnd2=(Math.min(pct+6,100)).toFixed(1);
+      return 'linear-gradient(to right,'+COL_GRAY_BAR+' '+pct.toFixed(1)+'%,'+COL_GRAY_FADE+' '+gEnd2+'%)';
+    } else {
+      // lower section max values
+      var maxVal={
+        '3k':30,'4k':30,'fh':25,'ss':30,'ls':40,'yh':50,'ch':30
+      }[catId]||30;
+      var pct=clamp01(actual/maxVal)*100;
+      if(pct<=0)return COL_SURFACE;
+      var gEnd2=(Math.min(pct+6,100)).toFixed(1);
+      return 'linear-gradient(to right,'+COL_GRAY_BAR+' '+pct.toFixed(1)+'%,'+COL_GRAY_FADE+' '+gEnd2+'%)';
+    }
+  }
+
+  if(rollCount===0)return COL_SURFACE;
+
+  var pH,pF;
+  if(isUpper){
+    pH=pUpperHeld(targetNum,rl);
+    pF=pUpperFree(targetNum,rl);
+  } else {
+    pH=pLowerHeld(catId,rl);
+    pF=pLowerFree(catId,rl);
+  }
+
+  var yPct=clamp01(pH)*100;
+  var gPct=clamp01(pF)*100;
+
+  // green is always >= yellow (free >= held in general, but clamp to be safe)
+  // Layer stack (painter's algorithm — last listed = furthest back):
+  // 1. yellow from 0..yPct
+  // 2. green from 0..gPct  (will show where yellow doesn't cover)
+  // 3. surface base
+  // Gradient bars: each color fades from a richer tone to a lighter one at the edge
+  // Yellow (held) on top, green (free) behind, surface base
+  return (
+    'linear-gradient(to right,'+COL_YELLOW+' '+yPct.toFixed(1)+'%,transparent '+yPct.toFixed(1)+'%),'
+    +'linear-gradient(to right,'+COL_GREEN+' '+gPct.toFixed(1)+'%,transparent '+gPct.toFixed(1)+'%),'
+    +COL_SURFACE
+  );
+}
+
+// ── History ───────────────────────────────────────────────────
+var STORAGE_KEY='yahtzee_scores_v1';
+function loadHistory(){try{return JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]')}catch(e){return[]}}
+function saveScore(s){var h=loadHistory();h.push({score:s,date:Date.now()});try{localStorage.setItem(STORAGE_KEY,JSON.stringify(h))}catch(e){}}
+function clearHistory(){if(!confirm('Clear all history?'))return;try{localStorage.removeItem(STORAGE_KEY)}catch(e){}renderHistoryPanel()}
+
+// ── Init ─────────────────────────────────────────────────────
+function initConstants(){
+  var s=getComputedStyle(document.documentElement);
+  MAX_ROLLS=parseInt(s.getPropertyValue('--max-rolls'))||3;
+  UPPER_TARGET=parseInt(s.getPropertyValue('--upper-bonus-target'))||63;
+  UPPER_BONUS=parseInt(s.getPropertyValue('--upper-bonus-score'))||35;
+}
+
+function newGame(){
+  dice=[0,0,0,0,0];held=[false,false,false,false,false];
+  rollCount=0;scores={};rolling=false;yahtzeeBonus=0;gameOver=false;
+  document.getElementById('overlay').classList.remove('show');
+  render();
+}
+
+function swapSides(){
+  diceRight=!diceRight;
+  var mr=document.getElementById('main-row');
+  mr.className=diceRight?'main-row swapped':'main-row';
+}
+
+function toggleSection(){
+  showBoth=!showBoth;
+  document.getElementById('btn-toggle').textContent=showBoth?'− Lower':'+ Lower';
+  renderScorecard();
+}
+
+function rollDice(){
+  // If previous game is over, auto-start a new game on first roll
+  if(gameOver){
+    dice=[0,0,0,0,0];held=[false,false,false,false,false];
+    rollCount=0;scores={};rolling=false;yahtzeeBonus=0;gameOver=false;
+    document.getElementById('overlay').classList.remove('show');
+  }
+  if(rollCount>=MAX_ROLLS||rolling)return;
+  rolling=true;
+  var panel=document.getElementById('dice-panel');
+  var wraps=panel.querySelectorAll('.die-wrap');
+  for(var i=0;i<wraps.length;i++){var oi=+wraps[i].dataset.orig;if(!held[oi])wraps[i].classList.add('rolling')}
+  setTimeout(function(){
+    for(var i=0;i<5;i++)if(!held[i])dice[i]=rnd();
+    rollCount++;rolling=false;render();
+  },300);
+}
+
+function toggleHold(origIdx){
+  if(rollCount===0||rollCount>=MAX_ROLLS)return;
+  held[origIdx]=!held[origIdx];
+  // Update only this die in-place — no reorder, no animation
+  var panel=document.getElementById('dice-panel');
+  var wraps=panel.querySelectorAll('.die-wrap');
+  for(var k=0;k<wraps.length;k++){
+    if(+wraps[k].dataset.orig===origIdx){
+      var w=wraps[k];
+      w.innerHTML=makeDie(dice[origIdx],held[origIdx],false);
+      if(held[origIdx]){
+        var ring=document.createElement('div');ring.className='held-ring';w.appendChild(ring);
+      }
+      break;
+    }
+  }
+  renderScorecard();
+}
+
+function isYahtzee(d){
+  if(!d[0])return false;
+  for(var i=1;i<5;i++)if(d[i]!==d[0])return false;
+  return true;
+}
+
+// ── Joker rules ──────────────────────────────────────────────
+// Returns an object describing the current joker situation:
+//   {active, faceValue, jokerPriority}
+// jokerPriority: 'upper' | 'lower' | 'any'
+//   'upper' = must score in matching upper box (it's open)
+//   'lower' = matching upper is taken; must score in a lower box if any open
+//   'any'   = all lower boxes taken; score anywhere
+function jokerState(){
+  if(!isYahtzee(dice)||scores['yh']!==50)return{active:false};
+  var fv=dice[0]; // face value of the yahtzee
+  // upper cat index: fv=1->ones, fv=2->twos, etc.
+  var upperCatId=UPPER_CATS[fv-1].id;
+  if(scores[upperCatId]===undefined){
+    // matching upper box is open — must go there
+    return{active:true,faceValue:fv,jokerPriority:'upper',upperCatId:upperCatId};
+  }
+  // matching upper box is taken — can we score in lower?
+  var anyLowerOpen=LOWER_CATS.some(function(cat){return scores[cat.id]===undefined});
+  if(anyLowerOpen){
+    return{active:true,faceValue:fv,jokerPriority:'lower',upperCatId:upperCatId};
+  }
+  // all lower boxes taken — score anywhere open
+  return{active:true,faceValue:fv,jokerPriority:'any',upperCatId:upperCatId};
+}
+
+// Returns true if a given category id is a legal scoring choice right now
+function isLegalScore(catId,isUpper){
+  if(scores[catId]!==undefined)return false; // already used
+  var js=jokerState();
+  if(!js.active)return true; // normal turn, anything open is fine
+  if(js.jokerPriority==='upper'){
+    // ONLY the matching upper box is legal
+    return(isUpper&&catId===js.upperCatId);
+  }
+  if(js.jokerPriority==='lower'){
+    // only lower section boxes are legal
+    return(!isUpper);
+  }
+  // 'any' — anything open
+  return true;
+}
+
+function claimScore(id,val){
+  if(scores[id]!==undefined||rollCount===0)return;
+  // enforce joker legality
+  var isUpper=UPPER_CATS.some(function(cat){return cat.id===id});
+  if(!isLegalScore(id,isUpper))return;
+  // award +100 bonus for extra Yahtzee
+  if(isYahtzee(dice)&&scores['yh']===50){
+    yahtzeeBonus+=100;
+  }
+  scores[id]=val;
+  held=[false,false,false,false,false];rollCount=0;dice=[0,0,0,0,0];
+  render();
+  var all=UPPER_CATS.concat(LOWER_CATS);
+  if(all.every(function(c){return scores[c.id]!==undefined})){
+    setTimeout(function(){
+      gameOver=true;
+      var total=calcTotal();saveScore(total);
+      document.getElementById('final-score').textContent=total;
+      document.getElementById('ov-rank').textContent=getRankText(total);
+      document.getElementById('overlay').classList.add('show');
+    },300);
+  }
+}
+
+function calcTotal(){
+  var up=UPPER_CATS.reduce(function(a,c){return a+(scores[c.id]||0)},0);
+  return up+(up>=UPPER_TARGET?UPPER_BONUS:0)+LOWER_CATS.reduce(function(a,c){return a+(scores[c.id]||0)},0)+yahtzeeBonus;
+}
+
+function getRankText(score){
+  var h=loadHistory();if(h.length<=1)return'First game!';
+  var sorted=h.map(function(g){return g.score}).sort(function(a,b){return a-b});
+  if(score===sorted[sorted.length-1])return'New personal best!';
+  var rank=sorted.filter(function(s){return s<=score}).length;
+  return'Better than '+Math.round((rank/sorted.length)*100)+'% of your games';
+}
+
+// ── History panel ─────────────────────────────────────────────
+// ── Version history ──────────────────────────────────────────
+var VERSION_LOG=[
+  {v:'1.0', note:'Initial release — basic Yahtzee with dice, scorecard, roll logic.'},
+  {v:'1.1', note:'Added SVG dice with realistic pips. Ivory face, dark pips.'},
+  {v:'1.2', note:'One-handed layout: dice column on left, scores on right. Swap button added.'},
+  {v:'1.3', note:'Odds system added — probability bars replace text badges. Green = free odds, yellow = held odds.'},
+  {v:'1.4', note:'Bar odds fixed: green now starts from current dice (held-blind), yellow respects selected dice. Yellow can no longer exceed green.'},
+  {v:'1.5', note:'Smart dice reordering: straight intent shows dice in sequence order; pairs grouped; upper sets floated to top. Reorder only on roll, not on hold.'},
+  {v:'1.6', note:'Score history saved via localStorage. Frequency chart added to History tab.'},
+  {v:'1.7', note:'Both Upper and Lower sections visible simultaneously. Toggle to hide Lower.'},
+  {v:'1.8', note:'Scored rows now dark gray background to distinguish from zero-available rows.'},
+  {v:'1.9', note:'Progress bar toward 63-point bonus made taller. Bar colors reverted to solid.'},
+  {v:'2.0', note:'Official Yahtzee bonus rules: extra Yahtzee awards +100. Joker priority enforced — must score matching upper box first, then open lower, then any.'},
+];
+
+function toggleVerLog(){
+  var log=document.getElementById('ver-log');
+  var btn=document.getElementById('ver-toggle');
+  if(log.classList.contains('hidden')){
+    // populate
+    log.innerHTML='';
+    // show newest first
+    for(var i=VERSION_LOG.length-1;i>=0;i--){
+      var e=VERSION_LOG[i];
+      var d=document.createElement('div');d.className='ver-entry';
+      d.innerHTML='<div class="ver-num">v'+e.v+'</div><div class="ver-note">'+e.note+'</div>';
+      log.appendChild(d);
+    }
+    log.classList.remove('hidden');log.classList.add('visible');
+    btn.textContent='hide version history';
+  } else {
+    log.classList.remove('visible');log.classList.add('hidden');
+    btn.textContent='version history';
+  }
+}
+
+function showHistory(){renderHistoryPanel();document.getElementById('hist-overlay').classList.add('show')}
+function showHistoryFromOverlay(){document.getElementById('overlay').classList.remove('show');showHistory()}
+function closeHistory(){document.getElementById('hist-overlay').classList.remove('show')}
+
+function renderHistoryPanel(){
+  var history=loadHistory();
+  var statsEl=document.getElementById('hist-stats'),chartWrap=document.getElementById('hist-chart-wrap');
+  if(history.length===0){statsEl.innerHTML='';chartWrap.innerHTML='<div class="hist-empty">No games yet!</div>';return}
+  var sc=history.map(function(g){return g.score});
+  var best=Math.max.apply(null,sc),avg=Math.round(sc.reduce(function(a,b){return a+b},0)/sc.length);
+  statsEl.innerHTML='<div class="stat-box"><div class="stat-val">'+history.length+'</div><div class="stat-lbl">Games</div></div><div class="stat-box"><div class="stat-val">'+avg+'</div><div class="stat-lbl">Average</div></div><div class="stat-box"><div class="stat-val">'+best+'</div><div class="stat-lbl">Best</div></div>';
+  var BIN=20,minS=Math.floor(Math.min.apply(null,sc)/BIN)*BIN,maxS=Math.ceil(Math.max.apply(null,sc)/BIN)*BIN;
+  var bins={};for(var b=minS;b<=maxS;b+=BIN)bins[b]=0;
+  sc.forEach(function(s){var b=Math.floor(s/BIN)*BIN;bins[b]=(bins[b]||0)+1});
+  var binKeys=Object.keys(bins).map(Number).sort(function(a,b){return a-b});
+  var maxCnt=Math.max.apply(null,Object.values(bins));
+  var W=chartWrap.clientWidth||300,H=chartWrap.clientHeight||170;
+  var PAD={top:8,right:8,bottom:36,left:26};
+  var plotW=W-PAD.left-PAD.right,plotH=H-PAD.top-PAD.bottom;
+  var xStep=plotW/binKeys.length,barW=Math.max(2,xStep-2);
+  var latestBin=Math.floor(sc[sc.length-1]/BIN)*BIN;
+  var yP=[];
+  [0,Math.ceil(maxCnt/2),maxCnt].forEach(function(t){
+    var y=PAD.top+plotH-(t/maxCnt)*plotH;
+    yP.push('<text x="'+(PAD.left-4)+'" y="'+(y+4)+'" text-anchor="end" font-size="9" fill="#7a8499">'+t+'</text>');
+    if(t>0)yP.push('<line x1="'+PAD.left+'" y1="'+y+'" x2="'+(PAD.left+plotW)+'" y2="'+y+'" stroke="rgba(255,255,255,.06)" stroke-width="1"/>');
+  });
+  var bP=binKeys.map(function(b,i){
+    var cnt=bins[b],bh=cnt===0?0:(cnt/maxCnt)*plotH,x=PAD.left+i*xStep+(xStep-barW)/2,y=PAD.top+plotH-bh;
+    var isL=b===latestBin,fill=isL?'#e94560':'#378ADD';
+    var lbl=cnt>0?'<text x="'+(x+barW/2)+'" y="'+(y-3)+'" text-anchor="middle" font-size="9" fill="'+(isL?'#e94560':'#74b9ff')+'">'+cnt+'</text>':'';
+    var xl=(i%2===0||binKeys.length<=8)?'<text x="'+(x+barW/2)+'" y="'+(PAD.top+plotH+14)+'" text-anchor="middle" font-size="8" fill="#7a8499">'+b+'</text>':'';
+    return'<rect x="'+x+'" y="'+y+'" width="'+barW+'" height="'+bh+'" rx="2" fill="'+fill+'" opacity="'+(isL?1:.75)+'"/>'+lbl+xl;
+  });
+  var axes='<line x1="'+PAD.left+'" y1="'+PAD.top+'" x2="'+PAD.left+'" y2="'+(PAD.top+plotH)+'" stroke="rgba(255,255,255,.15)" stroke-width="1"/><line x1="'+PAD.left+'" y1="'+(PAD.top+plotH)+'" x2="'+(PAD.left+plotW)+'" y2="'+(PAD.top+plotH)+'" stroke="rgba(255,255,255,.15)" stroke-width="1"/>';
+  var legend='<rect x="'+PAD.left+'" y="'+(PAD.top+plotH+22)+'" width="8" height="8" rx="1" fill="#e94560"/><text x="'+(PAD.left+11)+'" y="'+(PAD.top+plotH+30)+'" font-size="9" fill="#7a8499">Latest</text><rect x="'+(PAD.left+52)+'" y="'+(PAD.top+plotH+22)+'" width="8" height="8" rx="1" fill="#378ADD"/><text x="'+(PAD.left+63)+'" y="'+(PAD.top+plotH+30)+'" font-size="9" fill="#7a8499">Previous</text>';
+  chartWrap.innerHTML='<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" xmlns="http://www.w3.org/2000/svg">'+yP.join('')+axes+bP.join('')+legend+'</svg>';
+}
+
+// ── Render ─────────────────────────────────────────────────────
+function renderDice(){
+  var panel=document.getElementById('dice-panel');
+  var rollingOrig=[];
+  var old=panel.querySelectorAll('.die-wrap.rolling');
+  for(var k=0;k<old.length;k++)rollingOrig.push(+old[k].dataset.orig);
+  panel.innerHTML='';
+  var order=orderedDiceSlots();
+  for(var s=0;s<5;s++){
+    (function(slot){
+      var origIdx=order.origIdx[slot],v=order.slots[slot],isHeld=order.heldSlots[slot],isEmpty=(v===0);
+      var wasRolling=(rollingOrig.indexOf(origIdx)>=0);
+      var sd=document.createElement('div');sd.className='die-slot';
+      var w=document.createElement('div');
+      w.className='die-wrap'+(wasRolling?' rolling':'');
+      w.dataset.orig=origIdx;
+      w.innerHTML=makeDie(v,isHeld,isEmpty);
+      if(isHeld){var ring=document.createElement('div');ring.className='held-ring';w.appendChild(ring)}
+      w.onclick=(function(oi){return function(){toggleHold(oi)}})(origIdx);
+      sd.appendChild(w);panel.appendChild(sd);
+    })(s);
+  }
+  var ctrl=document.createElement('div');ctrl.className='dice-controls';
+  var pipsEl=document.createElement('div');pipsEl.className='pips';
+  for(var i=0;i<MAX_ROLLS;i++){var p=document.createElement('div');p.className='pip'+(i<rollCount?' on':'');pipsEl.appendChild(p)}
+  ctrl.appendChild(pipsEl);
+  var btn=document.createElement('button');btn.className='btn-roll';
+  btn.disabled=(rollCount>=MAX_ROLLS);
+  btn.textContent=rollCount===0?'Roll':rollCount<MAX_ROLLS?'Again':'Done';
+  btn.onclick=rollDice;
+  ctrl.appendChild(btn);
+  panel.appendChild(ctrl);
+}
+
+function renderScorecard(){
+  var list=document.getElementById('scores-list');
+  list.innerHTML='';
+  var rl=MAX_ROLLS-rollCount;
+  var up=UPPER_CATS.reduce(function(a,c){return a+(scores[c.id]||0)},0);
+
+  // Show joker instruction in upper header if needed
+  var js0=jokerState();
+  if(js0.active&&js0.jokerPriority==='upper'){
+    var secHdr=document.querySelector('.sec-lbl');
+    if(secHdr){
+      secHdr.innerHTML='Upper &nbsp;<span style="color:#f5c842;font-weight:700;font-size:9px;">Joker — pick '+UPPER_CATS[js0.faceValue-1].name+'</span>';
+    }
+  }
+  UPPER_CATS.forEach(function(cat,i){
+    var targetNum=i+1;
+    list.appendChild(makeRow(cat,true,targetNum,rl));
+  });
+
+  // Bonus row
+  var br=document.createElement('div');br.className='bonus-row-inner';
+  var pct=Math.min(up/UPPER_TARGET*100,100);
+  var needed=UPPER_TARGET-up;
+  var amtText=up>=UPPER_TARGET?'✓':'-'+needed;
+  br.innerHTML='<span class="bonus-lbl">+'+UPPER_BONUS+' bonus</span><div class="bonus-bar-bg"><div class="bonus-bar-fill" style="width:'+pct.toFixed(0)+'%"></div></div><span class="bonus-amt">'+amtText+'</span>';
+  list.appendChild(br);
+
+  if(showBoth){
+    var div=document.createElement('div');div.className='sec-divider';
+    var dl=document.createElement('span');dl.className='sec-lbl';dl.textContent='Lower';
+    div.appendChild(dl);
+    var js2=jokerState();
+    if(js2.active&&js2.jokerPriority==='lower'){
+      var jlbl=document.createElement('span');
+      jlbl.style.cssText='font-size:9px;color:#f5c842;font-weight:700;margin-left:auto;white-space:nowrap;';
+      jlbl.textContent='Joker — pick lower';
+      div.appendChild(jlbl);
+    } else if(js2.active&&js2.jokerPriority==='any'){
+      var jlbl=document.createElement('span');
+      jlbl.style.cssText='font-size:9px;color:#f5c842;font-weight:700;margin-left:auto;white-space:nowrap;';
+      jlbl.textContent='Joker — pick any';
+      div.appendChild(jlbl);
+    } else if(yahtzeeBonus>0){
+      var yb=document.createElement('span');
+      yb.style.cssText='font-size:9px;color:#f5c842;font-weight:700;margin-left:auto;white-space:nowrap;';
+      yb.textContent='+'+yahtzeeBonus+' Yahtzee bonus';
+      div.appendChild(yb);
+    }
+    list.appendChild(div);
+    LOWER_CATS.forEach(function(cat){list.appendChild(makeRow(cat,false,null,rl))});
+  }
+}
+
+function makeRow(cat,isUpper,targetNum,rl){
+  var used=scores[cat.id]!==undefined;
+  var rolled=rollCount>0;
+  var curScore=rolled?cat.fn(dice):null;
+  var hasScore=curScore!==null&&curScore>0;
+  var catId=cat.id;
+
+  // Joker check
+  var js=rolled?jokerState():{active:false};
+  var legal=!used&&rolled&&isLegalScore(catId,isUpper);
+  var jokerBlocked=!used&&rolled&&js.active&&!legal;
+
+  var row=document.createElement('div');
+  if(used){
+    row.className='score-row used';
+    row.style.background=rowBg(true,isUpper,targetNum,catId,rl);
+  } else if(jokerBlocked){
+    // illegal joker choice — dim it out, no click
+    row.className='score-row joker-blocked';
+    row.style.background=COL_SURFACE;
+    row.style.opacity='0.22';
+  } else if(rolled){
+    row.className='score-row clickable';
+    row.style.background=rowBg(false,isUpper,targetNum,catId,rl);
+  } else {
+    row.className='score-row';
+    row.style.background=COL_SURFACE;
+  }
+
+  var nm=document.createElement('span');nm.className='s-name';
+  var nameText=cat.name;
+  // Joker indicator labels
+  if(js.active&&rolled&&!used){
+    if(js.jokerPriority==='upper'&&isUpper&&catId===js.upperCatId){
+      nameText=cat.name+' ← joker';
+    } else if(js.jokerPriority==='lower'&&!isUpper&&legal){
+      nameText=cat.name+' ← joker';
+    } else if(js.jokerPriority==='any'&&legal){
+      nameText=cat.name+' ← joker';
+    }
+  }
+  // Extra Yahtzee bonus indicator on yh row
+  if(catId==='yh'&&scores['yh']===50&&rolled&&isYahtzee(dice)){
+    nameText='Yahtzee! +100';
+  }
+  nm.textContent=nameText;
+
+  var sv=document.createElement('span');
+  if(used){
+    sv.className='s-val sv-scored';sv.textContent=scores[catId];
+  } else if(!rolled||jokerBlocked){
+    sv.className='s-val sv-blank';sv.textContent=rolled?'—':'—';
+  } else if(hasScore){
+    var ph=isUpper?pUpperHeld(targetNum,rl):pLowerHeld(catId,rl);
+    sv.className='s-val '+(ph>=.9995?'sv-certain':'sv-avail');
+    sv.textContent='+'+curScore;
+  } else {
+    sv.className='s-val sv-zero';sv.textContent='0';
+  }
+
+  row.appendChild(nm);row.appendChild(sv);
+  if(legal)row.onclick=function(){claimScore(catId,cat.fn(dice))};
+  return row;
+}
+
+function render(){renderDice();renderScorecard();document.getElementById('total').textContent=calcTotal()}
+
+initConstants();
+newGame();
+</script>
+</body>
+</html>
