@@ -43,14 +43,14 @@
     display: flex;
     flex-direction: row;
     flex-wrap: nowrap;
-    align-items: center;
+    align-items: flex-end;
     justify-content: center;
     gap: 16px;
     width: 100%;
     height: 100vh;
     height: 100dvh;
     box-sizing: border-box;
-    padding: 10px;
+    padding: 10px 10px 18px 10px;
   }
   .wrap.swapped {
     flex-direction: row-reverse;
@@ -59,8 +59,8 @@
     position: relative;
     flex: 0 1 auto;
     display: flex;
-    height: 100%;
-    align-items: center;
+    height: auto;
+    align-items: flex-end;
     justify-content: center;
   }
   canvas#board {
@@ -225,7 +225,7 @@
 <div class="wrap">
   <div class="stage">
     <canvas id="board" width="300" height="600"></canvas>
-    <div id="versionBadge">v15</div>
+    <div id="versionBadge">v16</div>
     <div id="themeToast"></div>
     <div id="overlay">
       <div id="overlayText" style="font-size:24px;font-weight:bold;">Paused</div>
