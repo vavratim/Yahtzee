@@ -864,7 +864,6 @@ function initConstants(){
 function newGame(){
   dice=[0,0,0,0,0];held=[false,false,false,false,false];
   rollCount=0;scores={};rolling=false;yahtzeeBonus=0;gameOver=false;
-  clearRowCanvases();
   document.getElementById('overlay').classList.remove('show');
   render();
 }
@@ -1517,8 +1516,6 @@ function applySettings(){
   root.style.setProperty('--row-max-height',rh+'px');
   root.style.setProperty('--header-font',hs+'px');
   root.style.setProperty('--die-size',ds+'px');
-  // Resize Three.js
-  if(diceRenderer){setTimeout(resizeThree,50);}
   // Dice position: justify-content of dice-panel
   var panel=document.getElementById('dice-panel');
   if(panel){
