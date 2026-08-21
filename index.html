@@ -73,7 +73,7 @@ body{font-family:-apple-system,'SF Pro Display','Helvetica Neue',sans-serif;back
 .btn-sm{background:rgba(255,255,255,.1);color:var(--text);border:none;border-radius:5px;padding:2px 7px;font-size:10px;font-weight:600;cursor:pointer;-webkit-appearance:none;white-space:nowrap}
 .btn-sm:active{background:rgba(255,255,255,.2)}
 
-.scores-list{flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0}
+.scores-list{flex:1;display:flex;flex-direction:column;overflow-y:auto;min-height:0;-webkit-overflow-scrolling:touch}
 
 /* Score rows */
 .score-row{
@@ -81,7 +81,7 @@ body{font-family:-apple-system,'SF Pro Display','Helvetica Neue',sans-serif;back
   padding:0 6px;gap:3px;
   border-bottom:1px solid rgba(0,0,0,.2);
   cursor:default;
-  flex:1;min-height:0;max-height:40px;
+  flex:1 1 0;min-height:22px;
   position:relative;overflow:hidden;
   transform:perspective(600px) rotateX(0deg);
   transition:transform .15s;
@@ -190,7 +190,7 @@ input[type=range].setting-slider::-webkit-slider-thumb{-webkit-appearance:none;w
 <div class="app">
   <div class="header">
     <h1>Yahtzee</h1>
-    <div class="total-wrap"><div class="lbl">Score</div><div class="val" id="total">0</div></div>
+    <div class="total-wrap"><div class="lbl">Score <span id="app-ver" style="opacity:.4;font-size:8px;"></span></div><div class="val" id="total">0</div></div>
   </div>
   <div class="main-row" id="main-row">
     <div class="dice-panel" id="dice-panel"></div>
@@ -1247,127 +1247,119 @@ function initGyro(){
 }
 
 function animateRowCanvas(canvas,catId,targetLevel,isFlame,isGray){
-  if(!canvas._running){
-    canvas._running=true;
-    var state=liquidState[catId]||{level:0,vel:0,waveOff:Math.random()*Math.PI*2};
-    liquidState[catId]=state;
-    // Flame particles
-    var particles=[];
-    if(isFlame){
-      for(var p=0;p<18;p++){
-        particles.push({x:Math.random(),y:1,vy:-(0.015+Math.random()*0.025),vx:(Math.random()-0.5)*0.008,life:Math.random(),maxLife:0.6+Math.random()*0.4,r:Math.random()*3+2});
-      }
-    }
-    function frame(){
-      if(!canvas.isConnected){canvas._running=false;return;}
-      requestAnimationFrame(frame);
-      var W=canvas.width=canvas.offsetWidth,H=canvas.height=canvas.offsetHeight;
-      if(!W||!H)return;
-      var ctx=canvas.getContext('2d');
-      ctx.clearRect(0,0,W,H);
-
-      // Liquid physics: spring toward target
-      var spring=0.08,damp=0.82;
-      state.vel+=(targetLevel-state.level)*spring;
-      state.vel+=gyroTilt*0.004; // tilt pushes liquid
-      state.vel*=damp;
-      state.level+=state.vel;
-      state.level=Math.max(0,Math.min(1,state.level));
-      state.waveOff+=0.04+Math.abs(state.vel)*2;
-
-      var fillH=state.level*H;
-      var fillY=H-fillH;
-
-      if(isFlame&&state.level>=0.995){
-        // Full flame mode: draw liquid + flames
-        // Liquid fill
-        var grd=ctx.createLinearGradient(0,fillY,W,H);
-        grd.addColorStop(0,'rgba(255,80,0,0.85)');
-        grd.addColorStop(0.5,'rgba(220,50,0,0.75)');
-        grd.addColorStop(1,'rgba(180,20,0,0.65)');
-        ctx.beginPath();
-        ctx.moveTo(0,H);
-        // Wavy top
-        var segs=20;
-        for(var si=0;si<=segs;si++){
-          var px=si/segs*W;
-          var wave=Math.sin(si*0.8+state.waveOff)*2.5+Math.sin(si*1.3+state.waveOff*0.7)*1.5;
-          ctx.lineTo(px,fillY+wave);
-        }
-        ctx.lineTo(W,H);ctx.closePath();
-        ctx.fillStyle=grd;ctx.fill();
-
-        // Flame particles
-        particles.forEach(function(p){
-          p.x+=p.vx+gyroTilt*0.002;
-          p.y+=p.vy;
-          p.life+=0.025;
-          if(p.life>p.maxLife||p.y<-0.1){
-            p.x=0.1+Math.random()*0.8;p.y=1+Math.random()*0.05;
-            p.vy=-(0.018+Math.random()*0.022);p.vx=(Math.random()-0.5)*0.008;
-            p.life=0;p.maxLife=0.5+Math.random()*0.4;p.r=Math.random()*3+2;
-          }
-          var t=p.life/p.maxLife;
-          var alpha=(1-t)*0.85;
-          var py=(1-p.y)*H-fillH+10;
-          var g2=ctx.createRadialGradient(p.x*W,py,0,p.x*W,py,p.r*3*(1-t*0.5));
-          g2.addColorStop(0,'rgba(255,240,100,'+alpha+')');
-          g2.addColorStop(0.4,'rgba(255,100,20,'+(alpha*0.7)+')');
-          g2.addColorStop(1,'rgba(255,20,0,0)');
-          ctx.beginPath();ctx.arc(p.x*W,py,p.r*3*(1-t*0.5),0,Math.PI*2);
-          ctx.fillStyle=g2;ctx.fill();
-        });
-
-      } else if(isGray){
-        // Scored: gray liquid
-        var grd2=ctx.createLinearGradient(0,0,0,H);
-        grd2.addColorStop(0,'rgba(140,138,160,0.62)');
-        grd2.addColorStop(1,'rgba(80,78,98,0.38)');
-        ctx.beginPath();
-        ctx.moveTo(0,H);
-        var segs2=16;
-        for(var si2=0;si2<=segs2;si2++){
-          var px2=si2/segs2*W;
-          var w2=Math.sin(si2*0.9+state.waveOff)*1.8+Math.sin(si2*1.6+state.waveOff*0.6)*1;
-          ctx.lineTo(px2,fillY+w2);
-        }
-        ctx.lineTo(W,H);ctx.closePath();
-        ctx.fillStyle=grd2;ctx.fill();
-      } else {
-        // Active: green layer then yellow layer
-        // Green (free odds - wider, behind)
-        if(targetLevel.green>0.005){
-          var gFillH=targetLevel.green*H,gFillY=H-gFillH;
-          var gg=ctx.createLinearGradient(0,gFillY,0,H);
-          gg.addColorStop(0,'rgba(35,150,70,0.62)');gg.addColorStop(1,'rgba(20,100,50,0.45)');
-          ctx.beginPath();ctx.moveTo(0,H);
-          for(var si3=0;si3<=16;si3++){
-            var px3=si3/16*W;
-            var ww=Math.sin(si3*0.9+state.waveOff+1)*2.2+Math.sin(si3*1.4+state.waveOff*0.8)*1.4;
-            var yy=gFillY+ww;ctx.lineTo(px3,yy);
-          }
-          ctx.lineTo(W,H);ctx.closePath();ctx.fillStyle=gg;ctx.fill();
-        }
-        // Yellow (held odds - narrower, in front)
-        if(targetLevel.yellow>0.005){
-          var yFillH=targetLevel.yellow*H,yFillY=H-yFillH;
-          var yg=ctx.createLinearGradient(0,yFillY,0,H);
-          yg.addColorStop(0,'rgba(210,158,10,0.72)');yg.addColorStop(1,'rgba(160,110,5,0.52)');
-          ctx.beginPath();ctx.moveTo(0,H);
-          for(var si4=0;si4<=16;si4++){
-            var px4=si4/16*W;
-            var ww4=Math.sin(si4+state.waveOff*1.2)*2.5+Math.sin(si4*1.7+state.waveOff)*1.2;
-            ctx.lineTo(px4,yFillY+ww4);
-          }
-          ctx.lineTo(W,H);ctx.closePath();ctx.fillStyle=yg;ctx.fill();
-        }
-      }
-    }
-    requestAnimationFrame(frame);
-  } else {
-    // Update target
-    liquidState[catId].targetLevel=targetLevel;
+  // targetLevel: number (gray/used) OR {green,yellow} (active odds) OR 0
+  if(canvas._running){
+    canvas._targetLevel=targetLevel;
+    canvas._isFlame=isFlame;
+    canvas._isGray=isGray;
+    return;
   }
+  canvas._running=true;
+  canvas._targetLevel=targetLevel;
+  canvas._isFlame=isFlame;
+  canvas._isGray=isGray;
+
+  var st=liquidState[catId]||{green:0,yellow:0,gray:0,waveOff:Math.random()*Math.PI*2};
+  liquidState[catId]=st;
+
+  var particles=[];
+  for(var p=0;p<22;p++){
+    particles.push({x:Math.random(),y:Math.random(),vx:(Math.random()-0.5)*0.006,vy:-(0.01+Math.random()*0.02),life:Math.random(),maxLife:0.5+Math.random()*0.5,r:Math.random()*3+2});
+  }
+
+  function frame(){
+    if(!canvas.isConnected){canvas._running=false;return;}
+    requestAnimationFrame(frame);
+    var W=canvas.width=canvas.offsetWidth||canvas.clientWidth;
+    var H=canvas.height=canvas.offsetHeight||canvas.clientHeight;
+    if(!W||!H)return;
+    var ctx=canvas.getContext('2d');
+    ctx.clearRect(0,0,W,H);
+
+    var tl=canvas._targetLevel;
+    var flame=canvas._isFlame;
+    var gray=canvas._isGray;
+
+    // Resolve target values
+    var tGreen=0,tYellow=0,tGray=0;
+    if(typeof tl==='number'){tGray=tl;}
+    else if(tl&&typeof tl==='object'){tGreen=tl.green||0;tYellow=tl.yellow||0;}
+
+    // Spring the levels toward targets
+    var spring=0.12,damp=0.75;
+    st.gvel=(st.gvel||0)+((tGreen-st.green)*spring);st.gvel*=damp;st.green+=st.gvel;
+    st.yvel=(st.yvel||0)+((tYellow-st.yellow)*spring);st.yvel*=damp;st.yellow+=st.yvel;
+    st.grvel=(st.grvel||0)+((tGray-st.gray)*spring);st.grvel*=damp;st.gray+=st.grvel;
+    st.green=Math.max(0,Math.min(1,st.green));
+    st.yellow=Math.max(0,Math.min(1,st.yellow));
+    st.gray=Math.max(0,Math.min(1,st.gray));
+    st.waveOff+=0.05;
+
+    // Vertical tilt from gyro adds a slosh to the liquid surface (in px)
+    var slosh=gyroTilt*H*0.35;
+
+    // Horizontal liquid bar drawer (left->right fill, wavy right edge)
+    function drawBar(level,colTop,colBot,phase){
+      if(level<=0.004)return;
+      var barW=level*W;
+      ctx.save();
+      var grd=ctx.createLinearGradient(0,0,barW,0);
+      grd.addColorStop(0,colTop);
+      grd.addColorStop(1,colBot);
+      ctx.fillStyle=grd;
+      // Body with a wavy right edge + tilt slosh on top
+      ctx.beginPath();
+      ctx.moveTo(0,0);
+      // wavy right edge
+      var segs=8;
+      for(var i=0;i<=segs;i++){
+        var yy=i/segs*H;
+        var wob=Math.sin(yy*0.15+st.waveOff+phase)*2.2;
+        ctx.lineTo(barW+wob,yy);
+      }
+      ctx.lineTo(0,H);
+      ctx.closePath();
+      ctx.fill();
+      // Shine on top edge (tilt-reactive)
+      var sh=ctx.createLinearGradient(0,0,0,H*0.5);
+      sh.addColorStop(0,'rgba(255,255,255,0.14)');
+      sh.addColorStop(1,'rgba(255,255,255,0)');
+      ctx.fillStyle=sh;
+      ctx.fillRect(0,Math.max(0,slosh*0.3),barW,H*0.4);
+      ctx.restore();
+    }
+
+    if(gray){
+      drawBar(st.gray,'rgba(140,138,160,0.6)','rgba(80,78,98,0.32)',0);
+    } else if(flame){
+      // Full-width fiery bar with flame particles
+      drawBar(1,'rgba(255,90,0,0.8)','rgba(200,30,0,0.6)',0);
+      particles.forEach(function(pt){
+        pt.x+=pt.vx+gyroTilt*0.004;
+        pt.y+=pt.vy;
+        pt.life+=0.03;
+        if(pt.life>pt.maxLife||pt.y<-0.05){
+          pt.x=Math.random();pt.y=1;pt.vy=-(0.012+Math.random()*0.022);pt.vx=(Math.random()-0.5)*0.006;
+          pt.life=0;pt.maxLife=0.4+Math.random()*0.5;pt.r=Math.random()*3+2;
+        }
+        var tt=pt.life/pt.maxLife;
+        var a=(1-tt)*0.8;
+        var px=pt.x*W,py=pt.y*H;
+        var rr=pt.r*2.4*(1-tt*0.5);
+        var g2=ctx.createRadialGradient(px,py,0,px,py,rr);
+        g2.addColorStop(0,'rgba(255,240,120,'+a.toFixed(2)+')');
+        g2.addColorStop(0.4,'rgba(255,110,20,'+(a*0.7).toFixed(2)+')');
+        g2.addColorStop(1,'rgba(255,20,0,0)');
+        ctx.fillStyle=g2;
+        ctx.beginPath();ctx.arc(px,py,rr,0,Math.PI*2);ctx.fill();
+      });
+    } else {
+      // Green (free odds) behind, yellow (held odds) in front
+      drawBar(st.green,'rgba(35,155,72,0.6)','rgba(24,110,52,0.42)',0.5);
+      drawBar(st.yellow,'rgba(214,160,12,0.74)','rgba(165,116,6,0.5)',1.2);
+    }
+  }
+  frame();
 }
 
 function makeRow(cat,isUpper,targetNum,rl){
@@ -1537,9 +1529,9 @@ function applySettings(){
     hdr.style.paddingTop=Math.round((hs-28)/2)+'px';
     hdr.style.paddingBottom=Math.round((hs-28)/2)+'px';
   }
-  // Apply row max-height via querySelectorAll (CSS var doesn't apply to max-height reliably on all Safari)
+  // Row height controls the flex-basis / min-height of each row
   var rows=document.querySelectorAll('.score-row');
-  for(var i=0;i<rows.length;i++)rows[i].style.maxHeight=rh+'px';
+  for(var i=0;i<rows.length;i++){rows[i].style.minHeight=rh+'px';rows[i].style.flexBasis=rh+'px';}
 }
 function showSettings(){
   syncSliders();
@@ -1554,6 +1546,8 @@ currentSettings=loadSettings();
 
 initConstants();
 newGame();
+// Show current version number
+(function(){var v=document.getElementById('app-ver');if(v&&VERSION_LOG&&VERSION_LOG.length)v.textContent='v'+VERSION_LOG[VERSION_LOG.length-1].v;})();
 // Apply saved settings after first render
 setTimeout(function(){syncSliders();applySettings()},50);
 </script>
