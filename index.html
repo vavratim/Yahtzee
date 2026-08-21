@@ -7,6 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Yahtzee">
 <title>Yahtzee</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <style>
 :root{
   --max-rolls:3;--upper-bonus-score:35;--upper-bonus-target:63;
@@ -45,11 +46,10 @@ body{font-family:-apple-system,'SF Pro Display','Helvetica Neue',sans-serif;back
   padding:6px 5px;
   position:relative;
 }
-.die-slot{width:60px;height:59px;position:relative;flex-shrink:0;display:flex;align-items:center;justify-content:center;margin:1px 0}
-.die-wrap{width:56px;height:56px;cursor:pointer;position:relative;user-select:none;-webkit-user-select:none;transition:transform .1s}
+.die-slot{width:60px;height:60px;position:relative;flex-shrink:0;display:flex;align-items:center;justify-content:center;margin:1px 0}
+.die-wrap{width:56px;height:56px;cursor:pointer;position:relative;user-select:none;-webkit-user-select:none;overflow:hidden;border-radius:10px}
 .die-wrap:active{transform:scale(.86)}
-.die-wrap.rolling{animation:dr .3s ease}
-@keyframes dr{0%{transform:rotate(0) scale(1)}25%{transform:rotate(-15deg) scale(.83)}75%{transform:rotate(13deg) scale(.83)}100%{transform:rotate(0) scale(1)}}
+.die-wrap.rolling{opacity:1}/* Three.js handles roll animation */
 .held-ring{position:absolute;inset:-2px;border-radius:12px;border:2px solid #40916c;pointer-events:none}
 .btn-swap{position:absolute;top:5px;left:5px;right:5px;width:calc(100% - 10px);background:rgba(255,255,255,.1);color:var(--text);border:none;border-radius:8px;padding:7px 0;font-size:22px;cursor:pointer;-webkit-appearance:none;z-index:2}
 .btn-swap:active{background:rgba(255,255,255,.18)}
@@ -83,7 +83,11 @@ body{font-family:-apple-system,'SF Pro Display','Helvetica Neue',sans-serif;back
   cursor:default;
   flex:1;min-height:0;max-height:40px;
   position:relative;overflow:hidden;
+  transform:perspective(600px) rotateX(0deg);
+  transition:transform .15s;
 }
+.score-row .row-canvas{position:absolute;inset:0;pointer-events:none;z-index:0}
+.row-canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:0;}
 .score-row.clickable{cursor:pointer}
 .score-row.clickable:active{filter:brightness(1.18)}
 .score-row.used{cursor:default;background:#0d0f1a !important;}
@@ -297,18 +301,202 @@ function hasSeq(d,n){
 function rnd(){return Math.ceil(Math.random()*6)}
 function clamp01(x){return x<0?0:x>1?1:x}
 
-// ── SVG dice ─────────────────────────────────────────────────
-var PIPS={
-  1:[[.5,.5]],2:[[.27,.27],[.73,.73]],3:[[.27,.27],[.5,.5],[.73,.73]],
-  4:[[.27,.27],[.73,.27],[.27,.73],[.73,.73]],
-  5:[[.27,.27],[.73,.27],[.5,.5],[.27,.73],[.73,.73]],
-  6:[[.27,.22],[.73,.22],[.27,.5],[.73,.5],[.27,.78],[.73,.78]]
+// ── Three.js Dice System ──────────────────────────────────────
+var threeRenderers={}; // keyed by origIdx
+var threeScenes={};
+var threeCameras={};
+var threeCubes={};
+var threeAnimating={}; // origIdx -> {active,targetQuat,onDone}
+var threeRAFs={};
+
+// Pip positions on each face of a unit cube
+// Face order: +X=1, -X=6, +Y=2, -Y=5, +Z=3, -Z=4
+var PIP_FACES={
+  1:{faceIdx:0,pips:[[0,0]]},
+  2:{faceIdx:2,pips:[[-0.25,-0.25],[0.25,0.25]]},
+  3:{faceIdx:4,pips:[[0,0],[-0.28,-0.28],[0.28,0.28]]},
+  4:{faceIdx:1,pips:[[-0.25,-0.25],[0.25,-0.25],[-0.25,0.25],[0.25,0.25]]},
+  5:{faceIdx:3,pips:[[0,0],[-0.25,-0.25],[0.25,-0.25],[-0.25,0.25],[0.25,0.25]]},
+  6:{faceIdx:5,pips:[[-0.25,-0.3],[0.25,-0.3],[-0.25,0],[0.25,0],[-0.25,0.3],[0.25,0.3]]}
 };
-function makeDie(v,isHeld,empty){
-  var S=56,r=9,sw=1.5;
-  var face=isHeld?'#183d2c':'#f2ead8',stroke=isHeld?'#40916c':'#b8ac8e',pip=isHeld?'#74c69d':'#2a2040',op=empty?.2:1;
-  var ps=(PIPS[v]||[]).map(function(xy){return '<circle cx="'+(xy[0]*S).toFixed(1)+'" cy="'+(xy[1]*S).toFixed(1)+'" r="4.5" fill="'+pip+'"/>'}).join('');
-  return '<svg width="'+S+'" height="'+S+'" viewBox="0 0 '+S+' '+S+'" xmlns="http://www.w3.org/2000/svg" style="display:block;opacity:'+op+'"><rect x="'+(sw/2)+'" y="'+(sw/2)+'" width="'+(S-sw)+'" height="'+(S-sw)+'" rx="'+r+'" fill="'+face+'" stroke="'+stroke+'" stroke-width="'+sw+'"/>'+ps+'</svg>';
+
+// Face rotations so each face points toward camera (+Z)
+var FACE_QUATS=[
+  new THREE.Quaternion().setFromEuler(new THREE.Euler(0,-Math.PI/2,0)),     // +X face (1)
+  new THREE.Quaternion().setFromEuler(new THREE.Euler(0,Math.PI/2,0)),      // -X face (6)
+  new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI/2,0,0)),      // +Y face (2)
+  new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI/2,0,0)),     // -Y face (5)
+  new THREE.Quaternion(),                                                    // +Z face (3)
+  new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI,0,0)),        // -Z face (4)
+];
+// Map die value to face quaternion index
+var VALUE_TO_FACE={1:0,2:2,3:4,4:5,5:3,6:1};
+
+function makePipTexture(value,isHeld){
+  var size=256;
+  var can=document.createElement('canvas');can.width=size;can.height=size;
+  var ctx=can.getContext('2d');
+  // Face background
+  var r=size*0.12;
+  ctx.fillStyle=isHeld?'#183d2c':'#f0e8d0';
+  // Rounded rect
+  ctx.beginPath();
+  ctx.moveTo(r,0);ctx.lineTo(size-r,0);ctx.quadraticCurveTo(size,0,size,r);
+  ctx.lineTo(size,size-r);ctx.quadraticCurveTo(size,size,size-r,size);
+  ctx.lineTo(r,size);ctx.quadraticCurveTo(0,size,0,size-r);
+  ctx.lineTo(0,r);ctx.quadraticCurveTo(0,0,r,0);ctx.closePath();
+  ctx.fill();
+  // Border
+  ctx.strokeStyle=isHeld?'#40916c':'#c0a87a';ctx.lineWidth=8;ctx.stroke();
+  // Pips
+  if(value>0){
+    var pipColor=isHeld?'#74c69d':'#1a1a2e';
+    var layout=PIP_FACES[value]?PIP_FACES[value].pips:[];
+    var pr=size*0.085;
+    layout.forEach(function(p){
+      var cx=(p[0]+0.5)*size,cy=(p[1]+0.5)*size;
+      ctx.beginPath();ctx.arc(cx,cy,pr,0,Math.PI*2);
+      ctx.fillStyle=pipColor;ctx.fill();
+    });
+  }
+  var tex=new THREE.CanvasTexture(can);
+  return tex;
+}
+
+function makeEmptyTexture(isHeld){
+  var size=256;
+  var can=document.createElement('canvas');can.width=size;can.height=size;
+  var ctx=can.getContext('2d');
+  var r=size*0.12;
+  ctx.globalAlpha=0.25;
+  ctx.fillStyle=isHeld?'#183d2c':'#f0e8d0';
+  ctx.beginPath();
+  ctx.moveTo(r,0);ctx.lineTo(size-r,0);ctx.quadraticCurveTo(size,0,size,r);
+  ctx.lineTo(size,size-r);ctx.quadraticCurveTo(size,size,size-r,size);
+  ctx.lineTo(r,size);ctx.quadraticCurveTo(0,size,0,size-r);
+  ctx.lineTo(0,r);ctx.quadraticCurveTo(0,0,r,0);ctx.closePath();
+  ctx.fill();
+  var tex=new THREE.CanvasTexture(can);
+  return tex;
+}
+
+function createDieScene(container,origIdx,value,isHeld,isEmpty){
+  // Cleanup existing
+  if(threeRAFs[origIdx])cancelAnimationFrame(threeRAFs[origIdx]);
+  if(threeRenderers[origIdx]){
+    threeRenderers[origIdx].dispose();
+    var oldCanvas=container.querySelector('canvas');
+    if(oldCanvas)oldCanvas.remove();
+  }
+
+  var W=container.clientWidth||56,H=container.clientHeight||56;
+  var renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+  renderer.setSize(W,H);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+  renderer.setClearColor(0x000000,0);
+  renderer.domElement.style.cssText='position:absolute;inset:0;width:100%;height:100%;border-radius:10px;';
+  container.style.position='relative';
+  container.appendChild(renderer.domElement);
+
+  var scene=new THREE.Scene();
+  var camera=new THREE.PerspectiveCamera(45,W/H,0.1,100);
+  camera.position.z=2.8;
+
+  // Lighting
+  var amb=new THREE.AmbientLight(0xffffff,0.7);scene.add(amb);
+  var dir=new THREE.DirectionalLight(0xffffff,0.9);dir.position.set(1,2,3);scene.add(dir);
+  var dir2=new THREE.DirectionalLight(isHeld?0x40916c:0xffeedd,0.4);dir2.position.set(-2,-1,1);scene.add(dir2);
+
+  // Build cube with one pip texture per face
+  var mats=[];
+  for(var f=0;f<6;f++){
+    // Which die value goes on this face?
+    var faceVal=null;
+    for(var v2=1;v2<=6;v2++){if(VALUE_TO_FACE[v2]===f){faceVal=v2;break;}}
+    var tex=isEmpty?makeEmptyTexture(isHeld):makePipTexture(faceVal,isHeld);
+    mats.push(new THREE.MeshLambertMaterial({map:tex,transparent:isEmpty}));
+  }
+
+  var geo=new THREE.BoxGeometry(1,1,1);
+  var cube=new THREE.Mesh(geo,mats);
+  scene.add(cube);
+
+  // Set initial rotation to show correct face
+  if(!isEmpty&&value>0){
+    var targetQ=FACE_QUATS[VALUE_TO_FACE[value]].clone();
+    cube.quaternion.copy(targetQ);
+  }
+
+  threeRenderers[origIdx]=renderer;
+  threeScenes[origIdx]=scene;
+  threeCameras[origIdx]=camera;
+  threeCubes[origIdx]=cube;
+  threeAnimating[origIdx]={active:false};
+
+  // Animate loop
+  function loop(){
+    threeRAFs[origIdx]=requestAnimationFrame(loop);
+    var anim=threeAnimating[origIdx];
+    if(anim.active){
+      // Roll: spin fast for duration, then snap to target
+      anim.t=(anim.t||0)+0.08;
+      if(anim.t<1){
+        // Random tumble
+        cube.rotation.x+=0.18+anim.t*0.1;
+        cube.rotation.y+=0.22+anim.t*0.08;
+        cube.rotation.z+=0.1;
+      } else {
+        // Snap to target quaternion
+        cube.quaternion.slerp(anim.targetQuat,0.15);
+        var diff=cube.quaternion.dot(anim.targetQuat);
+        if(Math.abs(diff)>0.9995){
+          cube.quaternion.copy(anim.targetQuat);
+          anim.active=false;
+          if(anim.onDone)anim.onDone();
+        }
+      }
+    } else {
+      // Idle: gentle bob
+      var t=Date.now()*0.0008;
+      cube.rotation.x+=Math.sin(t+origIdx)*0.001;
+      cube.rotation.y+=Math.cos(t*0.7+origIdx)*0.001;
+    }
+    renderer.render(scene,camera);
+  }
+  loop();
+}
+
+function rollDieTo(origIdx,newValue,onDone){
+  var cube=threeCubes[origIdx];
+  if(!cube)return;
+  // Update textures to new value
+  var mats=cube.material;
+  for(var f=0;f<6;f++){
+    var faceVal=null;for(var v2=1;v2<=6;v2++){if(VALUE_TO_FACE[v2]===f){faceVal=v2;break;}}
+    if(mats[f].map){mats[f].map.dispose();}
+    mats[f].map=makePipTexture(faceVal,false);
+    mats[f].needsUpdate=true;
+    mats[f].map.needsUpdate=true;
+  }
+  var targetQ=FACE_QUATS[VALUE_TO_FACE[newValue]].clone();
+  threeAnimating[origIdx]={active:true,t:0,targetQuat:targetQ,onDone:onDone};
+}
+
+function updateDieHeld(origIdx,isHeld,value){
+  var cube=threeCubes[origIdx];if(!cube)return;
+  var mats=cube.material;
+  for(var f=0;f<6;f++){
+    var faceVal=null;for(var v2=1;v2<=6;v2++){if(VALUE_TO_FACE[v2]===f){faceVal=v2;break;}}
+    if(mats[f].map)mats[f].map.dispose();
+    mats[f].map=value>0?makePipTexture(faceVal,isHeld):makeEmptyTexture(isHeld);
+    mats[f].needsUpdate=true;mats[f].map.needsUpdate=true;
+    mats[f].transparent=(value===0);mats[f].opacity=1;
+  }
+  // Update lighting
+  var scene=threeScenes[origIdx];
+  scene.children.filter(function(ch){return ch.isDirectionalLight&&ch.color.g>0.5}).forEach(function(l){
+    l.color.setHex(isHeld?0x40916c:0xffeedd);
+  });
 }
 
 // ── State ────────────────────────────────────────────────────
@@ -676,6 +864,7 @@ function initConstants(){
 function newGame(){
   dice=[0,0,0,0,0];held=[false,false,false,false,false];
   rollCount=0;scores={};rolling=false;yahtzeeBonus=0;gameOver=false;
+  clearRowCanvases();
   document.getElementById('overlay').classList.remove('show');
   render();
 }
@@ -698,38 +887,51 @@ function toggleSection(){
 }
 
 function rollDice(){
-  // If previous game is over, auto-start a new game on first roll
   if(gameOver){
     dice=[0,0,0,0,0];held=[false,false,false,false,false];
     rollCount=0;scores={};rolling=false;yahtzeeBonus=0;gameOver=false;
+    // Reset Three.js scenes for new game
+    for(var ri=0;ri<5;ri++){
+      if(threeRAFs[ri])cancelAnimationFrame(threeRAFs[ri]);
+      delete threeRenderers[ri];delete threeScenes[ri];delete threeCubes[ri];delete diceWraps[ri];
+    }
     document.getElementById('overlay').classList.remove('show');
+    render();return;
   }
   if(rollCount>=MAX_ROLLS||rolling)return;
   rolling=true;
-  var panel=document.getElementById('dice-panel');
-  var wraps=panel.querySelectorAll('.die-wrap');
-  for(var i=0;i<wraps.length;i++){var oi=+wraps[i].dataset.orig;if(!held[oi])wraps[i].classList.add('rolling')}
-  setTimeout(function(){
-    for(var i=0;i<5;i++)if(!held[i])dice[i]=rnd();
-    rollCount++;rolling=false;render();
-  },300);
+  // Roll new values first
+  var newDice=dice.slice();
+  for(var i=0;i<5;i++)if(!held[i])newDice[i]=rnd();
+  var doneCount=0,freeCount=0;
+  for(var i=0;i<5;i++)if(!held[i])freeCount++;
+  if(freeCount===0){rolling=false;return;}
+  for(var i=0;i<5;i++){
+    if(!held[i]){
+      (function(idx,val){
+        rollDieTo(idx,val,function(){
+          doneCount++;
+          if(doneCount>=freeCount){
+            dice=newDice.slice();
+            rollCount++;rolling=false;
+            render();
+          }
+        });
+      })(i,newDice[i]);
+    }
+  }
 }
 
 function toggleHold(origIdx){
   if(rollCount===0||rollCount>=MAX_ROLLS)return;
   held[origIdx]=!held[origIdx];
-  // Update only this die in-place — no reorder, no animation
-  var panel=document.getElementById('dice-panel');
-  var wraps=panel.querySelectorAll('.die-wrap');
-  for(var k=0;k<wraps.length;k++){
-    if(+wraps[k].dataset.orig===origIdx){
-      var w=wraps[k];
-      w.innerHTML=makeDie(dice[origIdx],held[origIdx],false);
-      if(held[origIdx]){
-        var ring=document.createElement('div');ring.className='held-ring';w.appendChild(ring);
-      }
-      break;
-    }
+  updateDieHeld(origIdx,held[origIdx],dice[origIdx]);
+  // Update held ring
+  var w=diceWraps[origIdx];
+  if(w){
+    var ring=w.querySelector('.held-ring');
+    if(held[origIdx]&&!ring){var r2=document.createElement('div');r2.className='held-ring';w.appendChild(r2);}
+    else if(!held[origIdx]&&ring)ring.remove();
   }
   renderScorecard();
 }
@@ -833,6 +1035,7 @@ var VERSION_LOG=[
   {v:'1.8', note:'Scored rows now dark gray background to distinguish from zero-available rows.'},
   {v:'1.9', note:'Progress bar toward 63-point bonus made taller. Bar colors reverted to solid.'},
   {v:'2.0', note:'Official Yahtzee bonus rules: extra Yahtzee awards +100. Joker priority enforced — must score matching upper box first, then open lower, then any.'},
+  {v:'2.1', note:'Three.js 3D dice with real roll animation. Liquid physics bars that slosh with phone tilt. Flame effect on 100% bars. Gyroscope integration.'},
 ];
 
 function toggleVerLog(){
@@ -904,28 +1107,58 @@ function renderHistoryPanel(){
 }
 
 // ── Render ─────────────────────────────────────────────────────
+var diceWraps={}; // origIdx -> .die-wrap element (persists across renders for Three.js)
+
 function renderDice(){
   var panel=document.getElementById('dice-panel');
-  var rollingOrig=[];
-  var old=panel.querySelectorAll('.die-wrap.rolling');
-  for(var k=0;k<old.length;k++)rollingOrig.push(+old[k].dataset.orig);
-  panel.innerHTML='';
   var order=orderedDiceSlots();
+
+  // Remove die slots but keep three.js canvases alive
+  var existingSlots=panel.querySelectorAll('.die-slot');
+  existingSlots.forEach(function(s){s.remove()});
+
   for(var s=0;s<5;s++){
     (function(slot){
       var origIdx=order.origIdx[slot],v=order.slots[slot],isHeld=order.heldSlots[slot],isEmpty=(v===0);
-      var wasRolling=(rollingOrig.indexOf(origIdx)>=0);
       var sd=document.createElement('div');sd.className='die-slot';
-      var w=document.createElement('div');
-      w.className='die-wrap'+(wasRolling?' rolling':'');
-      w.dataset.orig=origIdx;
-      w.innerHTML=makeDie(v,isHeld,isEmpty);
-      if(isHeld){var ring=document.createElement('div');ring.className='held-ring';w.appendChild(ring)}
+      var w;
+      if(diceWraps[origIdx]){
+        w=diceWraps[origIdx];
+      } else {
+        w=document.createElement('div');
+        w.className='die-wrap';
+        w.dataset.orig=origIdx;
+        diceWraps[origIdx]=w;
+      }
+      // Held ring
+      var existRing=w.querySelector('.held-ring');
+      if(isHeld&&!existRing){var ring=document.createElement('div');ring.className='held-ring';w.appendChild(ring);}
+      else if(!isHeld&&existRing)existRing.remove();
+      // Init Three.js if not yet created
+      if(!threeRenderers[origIdx]){
+        sd.appendChild(w);
+        createDieScene(w,origIdx,v,isHeld,isEmpty);
+      } else {
+        sd.appendChild(w);
+        // Just update held state visuals
+        updateDieHeld(origIdx,isHeld,v);
+      }
       w.onclick=(function(oi){return function(){toggleHold(oi)}})(origIdx);
-      sd.appendChild(w);panel.appendChild(sd);
+      panel.insertBefore(sd,panel.firstChild);
     })(s);
   }
-  // Swap button at top of dice panel
+
+  // Re-insert slots in correct order (they were prepended, so reverse)
+  var slots=panel.querySelectorAll('.die-slot');
+  var slotArr=Array.prototype.slice.call(slots);
+  slotArr.reverse();
+  slotArr.forEach(function(s){panel.appendChild(s)});
+  // Remove the prepended ones
+  panel.querySelectorAll('.die-slot:not(:nth-last-child(n+3))');
+
+  // Controls
+  var existCtrl=panel.querySelector('.dice-controls');
+  if(existCtrl)existCtrl.remove();
   var ctrl=document.createElement('div');ctrl.className='dice-controls';
   var pipsEl=document.createElement('div');pipsEl.className='pips';
   for(var i=0;i<MAX_ROLLS;i++){var p=document.createElement('div');p.className='pip'+(i<rollCount?' on':'');pipsEl.appendChild(p)}
@@ -936,7 +1169,9 @@ function renderDice(){
   btn.onclick=rollDice;
   ctrl.appendChild(btn);
   panel.appendChild(ctrl);
-  // Swap button — position:absolute so always at top regardless of dice position
+
+  var existSwap=panel.querySelector('.btn-swap');
+  if(existSwap)existSwap.remove();
   var swapBtn=document.createElement('button');
   swapBtn.className='btn-swap';
   swapBtn.textContent=diceRight?'\u2190':'\u2192';
@@ -997,6 +1232,145 @@ function renderScorecard(){
   }
 }
 
+// ── Liquid bar physics ───────────────────────────────────────
+var liquidState={}; // catId -> {level, vel, waveOff, flame}
+var gyroTilt=0; // -1 to 1, from device motion
+var gyroListening=false;
+function initGyro(){
+  if(gyroListening)return;
+  gyroListening=true;
+  if(window.DeviceMotionEvent){
+    window.addEventListener('devicemotion',function(e){
+      var g=e.accelerationIncludingGravity;
+      if(g)gyroTilt=Math.max(-1,Math.min(1,(g.x||0)/9.8));
+    });
+  }
+}
+
+function animateRowCanvas(canvas,catId,targetLevel,isFlame,isGray){
+  if(!canvas._running){
+    canvas._running=true;
+    var state=liquidState[catId]||{level:0,vel:0,waveOff:Math.random()*Math.PI*2};
+    liquidState[catId]=state;
+    // Flame particles
+    var particles=[];
+    if(isFlame){
+      for(var p=0;p<18;p++){
+        particles.push({x:Math.random(),y:1,vy:-(0.015+Math.random()*0.025),vx:(Math.random()-0.5)*0.008,life:Math.random(),maxLife:0.6+Math.random()*0.4,r:Math.random()*3+2});
+      }
+    }
+    function frame(){
+      if(!canvas.isConnected){canvas._running=false;return;}
+      requestAnimationFrame(frame);
+      var W=canvas.width=canvas.offsetWidth,H=canvas.height=canvas.offsetHeight;
+      if(!W||!H)return;
+      var ctx=canvas.getContext('2d');
+      ctx.clearRect(0,0,W,H);
+
+      // Liquid physics: spring toward target
+      var spring=0.08,damp=0.82;
+      state.vel+=(targetLevel-state.level)*spring;
+      state.vel+=gyroTilt*0.004; // tilt pushes liquid
+      state.vel*=damp;
+      state.level+=state.vel;
+      state.level=Math.max(0,Math.min(1,state.level));
+      state.waveOff+=0.04+Math.abs(state.vel)*2;
+
+      var fillH=state.level*H;
+      var fillY=H-fillH;
+
+      if(isFlame&&state.level>=0.995){
+        // Full flame mode: draw liquid + flames
+        // Liquid fill
+        var grd=ctx.createLinearGradient(0,fillY,W,H);
+        grd.addColorStop(0,'rgba(255,80,0,0.85)');
+        grd.addColorStop(0.5,'rgba(220,50,0,0.75)');
+        grd.addColorStop(1,'rgba(180,20,0,0.65)');
+        ctx.beginPath();
+        ctx.moveTo(0,H);
+        // Wavy top
+        var segs=20;
+        for(var si=0;si<=segs;si++){
+          var px=si/segs*W;
+          var wave=Math.sin(si*0.8+state.waveOff)*2.5+Math.sin(si*1.3+state.waveOff*0.7)*1.5;
+          ctx.lineTo(px,fillY+wave);
+        }
+        ctx.lineTo(W,H);ctx.closePath();
+        ctx.fillStyle=grd;ctx.fill();
+
+        // Flame particles
+        particles.forEach(function(p){
+          p.x+=p.vx+gyroTilt*0.002;
+          p.y+=p.vy;
+          p.life+=0.025;
+          if(p.life>p.maxLife||p.y<-0.1){
+            p.x=0.1+Math.random()*0.8;p.y=1+Math.random()*0.05;
+            p.vy=-(0.018+Math.random()*0.022);p.vx=(Math.random()-0.5)*0.008;
+            p.life=0;p.maxLife=0.5+Math.random()*0.4;p.r=Math.random()*3+2;
+          }
+          var t=p.life/p.maxLife;
+          var alpha=(1-t)*0.85;
+          var py=(1-p.y)*H-fillH+10;
+          var g2=ctx.createRadialGradient(p.x*W,py,0,p.x*W,py,p.r*3*(1-t*0.5));
+          g2.addColorStop(0,'rgba(255,240,100,'+alpha+')');
+          g2.addColorStop(0.4,'rgba(255,100,20,'+(alpha*0.7)+')');
+          g2.addColorStop(1,'rgba(255,20,0,0)');
+          ctx.beginPath();ctx.arc(p.x*W,py,p.r*3*(1-t*0.5),0,Math.PI*2);
+          ctx.fillStyle=g2;ctx.fill();
+        });
+
+      } else if(isGray){
+        // Scored: gray liquid
+        var grd2=ctx.createLinearGradient(0,0,0,H);
+        grd2.addColorStop(0,'rgba(140,138,160,0.62)');
+        grd2.addColorStop(1,'rgba(80,78,98,0.38)');
+        ctx.beginPath();
+        ctx.moveTo(0,H);
+        var segs2=16;
+        for(var si2=0;si2<=segs2;si2++){
+          var px2=si2/segs2*W;
+          var w2=Math.sin(si2*0.9+state.waveOff)*1.8+Math.sin(si2*1.6+state.waveOff*0.6)*1;
+          ctx.lineTo(px2,fillY+w2);
+        }
+        ctx.lineTo(W,H);ctx.closePath();
+        ctx.fillStyle=grd2;ctx.fill();
+      } else {
+        // Active: green layer then yellow layer
+        // Green (free odds - wider, behind)
+        if(targetLevel.green>0.005){
+          var gFillH=targetLevel.green*H,gFillY=H-gFillH;
+          var gg=ctx.createLinearGradient(0,gFillY,0,H);
+          gg.addColorStop(0,'rgba(35,150,70,0.62)');gg.addColorStop(1,'rgba(20,100,50,0.45)');
+          ctx.beginPath();ctx.moveTo(0,H);
+          for(var si3=0;si3<=16;si3++){
+            var px3=si3/16*W;
+            var ww=Math.sin(si3*0.9+state.waveOff+1)*2.2+Math.sin(si3*1.4+state.waveOff*0.8)*1.4;
+            var yy=gFillY+ww;ctx.lineTo(px3,yy);
+          }
+          ctx.lineTo(W,H);ctx.closePath();ctx.fillStyle=gg;ctx.fill();
+        }
+        // Yellow (held odds - narrower, in front)
+        if(targetLevel.yellow>0.005){
+          var yFillH=targetLevel.yellow*H,yFillY=H-yFillH;
+          var yg=ctx.createLinearGradient(0,yFillY,0,H);
+          yg.addColorStop(0,'rgba(210,158,10,0.72)');yg.addColorStop(1,'rgba(160,110,5,0.52)');
+          ctx.beginPath();ctx.moveTo(0,H);
+          for(var si4=0;si4<=16;si4++){
+            var px4=si4/16*W;
+            var ww4=Math.sin(si4+state.waveOff*1.2)*2.5+Math.sin(si4*1.7+state.waveOff)*1.2;
+            ctx.lineTo(px4,yFillY+ww4);
+          }
+          ctx.lineTo(W,H);ctx.closePath();ctx.fillStyle=yg;ctx.fill();
+        }
+      }
+    }
+    requestAnimationFrame(frame);
+  } else {
+    // Update target
+    liquidState[catId].targetLevel=targetLevel;
+  }
+}
+
 function makeRow(cat,isUpper,targetNum,rl){
   var used=scores[cat.id]!==undefined;
   var rolled=rollCount>0;
@@ -1012,19 +1386,49 @@ function makeRow(cat,isUpper,targetNum,rl){
   var row=document.createElement('div');
   if(used){
     row.className='score-row used';
-    row.style.background=rowBg(true,isUpper,targetNum,catId,rl);
+    row.style.background='#0d0f1a';
   } else if(jokerBlocked){
-    // illegal joker choice — dim it out, no click
     row.className='score-row joker-blocked';
     row.style.background=COL_SURFACE;
     row.style.opacity='0.22';
   } else if(rolled){
     row.className='score-row clickable';
-    row.style.background=rowBg(false,isUpper,targetNum,catId,rl);
+    row.style.background=COL_SURFACE;
   } else {
     row.className='score-row';
     row.style.background=COL_SURFACE;
   }
+
+  // Liquid canvas
+  var canvas=document.createElement('canvas');
+  canvas.className='row-canvas';
+  row.appendChild(canvas);
+
+  var isFlame=false,isGray=false;
+  var targetLevel;
+
+  if(used){
+    isGray=true;
+    var actual=scores[catId]||0;
+    var pctGray=0;
+    if(isUpper){pctGray=clamp01(actual/(targetNum*3));}
+    else{var mx={'3k':30,'4k':30,'fh':25,'ss':30,'ls':40,'yh':50,'ch':30}[catId]||30;pctGray=clamp01(actual/mx);}
+    targetLevel=pctGray;
+    if(pctGray>=0.999)isFlame=true,isGray=false;
+  } else if(rolled&&!jokerBlocked){
+    var dp={held:0,free:0};
+    if(isUpper){dp.held=pUpperHeld(targetNum,rl);dp.free=pUpperFree(targetNum,rl);}
+    else{dp.held=pLowerHeld(catId,rl);dp.free=pLowerFree(catId,rl);}
+    targetLevel={green:clamp01(dp.free),yellow:clamp01(dp.held)};
+    if(dp.free>=0.9995)isFlame=true;
+  } else {
+    targetLevel=0;
+  }
+
+  setTimeout(function(){
+    initGyro();
+    animateRowCanvas(canvas,catId,targetLevel,isFlame,isGray);
+  },0);
 
   var nm=document.createElement('span');nm.className='s-name';
   var nameText=cat.name;
@@ -1113,6 +1517,8 @@ function applySettings(){
   root.style.setProperty('--row-max-height',rh+'px');
   root.style.setProperty('--header-font',hs+'px');
   root.style.setProperty('--die-size',ds+'px');
+  // Resize Three.js
+  if(diceRenderer){setTimeout(resizeThree,50);}
   // Dice position: justify-content of dice-panel
   var panel=document.getElementById('dice-panel');
   if(panel){
