@@ -40,14 +40,14 @@ body{font-family:-apple-system,'SF Pro Display','Helvetica Neue',sans-serif;back
 
 /* ── Dice panel ── */
 .dice-panel{
-  width:72px;flex-shrink:0;
+  width:88px;flex-shrink:0;
   background:var(--surface);border-radius:var(--radius);
   display:flex;flex-direction:column;align-items:center;justify-content:center;
   padding:6px 5px;
   position:relative;
 }
-.die-slot{width:60px;height:60px;position:relative;flex-shrink:0;display:flex;align-items:center;justify-content:center;margin:1px 0}
-.die-wrap{width:56px;height:56px;cursor:pointer;position:relative;user-select:none;-webkit-user-select:none;overflow:hidden;border-radius:10px}
+.die-slot{width:76px;height:76px;position:relative;flex-shrink:0;display:flex;align-items:center;justify-content:center;margin:1px 0}
+.die-wrap{width:72px;height:72px;cursor:pointer;position:relative;user-select:none;-webkit-user-select:none;overflow:hidden;border-radius:12px}
 .die-wrap:active{transform:scale(.86)}
 .die-wrap.rolling{opacity:1}/* Three.js handles roll animation */
 .held-ring{position:absolute;inset:-2px;border-radius:12px;border:2px solid #40916c;pointer-events:none}
@@ -389,7 +389,7 @@ function createDieScene(container,origIdx,value,isHeld,isEmpty){
     if(oldCanvas)oldCanvas.remove();
   }
 
-  var W=container.clientWidth||56,H=container.clientHeight||56;
+  var W=container.clientWidth||72,H=container.clientHeight||72;
   var renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
   renderer.setSize(W,H);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
@@ -1035,6 +1035,9 @@ var VERSION_LOG=[
   {v:'1.9', note:'Progress bar toward 63-point bonus made taller. Bar colors reverted to solid.'},
   {v:'2.0', note:'Official Yahtzee bonus rules: extra Yahtzee awards +100. Joker priority enforced — must score matching upper box first, then open lower, then any.'},
   {v:'2.1', note:'Three.js 3D dice with real roll animation. Liquid physics bars that slosh with phone tilt. Flame effect on 100% bars. Gyroscope integration.'},
+  {v:'2.2', note:'Fixed probability bars not rendering (NaN in liquid physics). Bars now fill horizontally left-to-right, green=free odds, yellow=held odds, with tilt slosh and flames at 100%.'},
+  {v:'2.3', note:'Locked-in scores now show a carved dark-stone slab instead of a gray bar. Dice enlarged.'},
+  {v:'2.4', note:'Stone slab now fills only to the score achieved — upper rows show dice counted / 3 (1 die = 33%, 2 = 67%, 3+ = flame). Chiseled right edge with an empty recess behind it.'},
 ];
 
 function toggleVerLog(){
@@ -1330,7 +1333,48 @@ function animateRowCanvas(canvas,catId,targetLevel,isFlame,isGray){
     }
 
     if(gray){
-      drawBar(st.gray,'rgba(140,138,160,0.6)','rgba(80,78,98,0.32)',0);
+      // Stone slab fills only as far as the score got (upper: dice counted / 3)
+      var sw=Math.max(0,Math.min(1,st.gray))*W;
+      // Empty recess behind the slab so a used row still reads as used at 0
+      ctx.fillStyle='rgba(0,0,0,0.22)';
+      ctx.fillRect(0,0,W,H);
+      ctx.fillStyle='rgba(255,255,255,0.03)';
+      ctx.fillRect(0,H-1,W,1);
+      if(sw>0.5){
+        ctx.save();
+        ctx.beginPath();ctx.rect(0,0,sw,H);ctx.clip();
+        var sgrd=ctx.createLinearGradient(0,0,0,H);
+        sgrd.addColorStop(0,'#2b2b33');
+        sgrd.addColorStop(0.5,'#212127');
+        sgrd.addColorStop(1,'#17171c');
+        ctx.fillStyle=sgrd;
+        ctx.fillRect(0,0,sw,H);
+        // Mottled stone speckle (deterministic per catId so it doesn't shimmer)
+        if(!st.stoneSpots){
+          st.stoneSpots=[];
+          var seed=0;for(var ci=0;ci<catId.length;ci++)seed+=catId.charCodeAt(ci);
+          function sr(){seed=(seed*9301+49297)%233280;return seed/233280;}
+          for(var sp=0;sp<26;sp++){st.stoneSpots.push({x:sr(),y:sr(),r:sr()*2+0.5,l:sr()});}
+        }
+        st.stoneSpots.forEach(function(s2){
+          var shade=s2.l>0.5?255:0;
+          ctx.fillStyle='rgba('+shade+','+shade+','+shade+','+(0.04+s2.l*0.05).toFixed(3)+')';
+          ctx.beginPath();ctx.arc(s2.x*sw,s2.y*H,s2.r,0,Math.PI*2);ctx.fill();
+        });
+        // Top bevel highlight + bottom shadow for carved look
+        ctx.fillStyle='rgba(255,255,255,0.05)';ctx.fillRect(0,0,sw,1.5);
+        ctx.fillStyle='rgba(0,0,0,0.35)';ctx.fillRect(0,H-2,sw,2);
+        // A subtle engraved crack, scaled to the slab
+        ctx.strokeStyle='rgba(0,0,0,0.25)';ctx.lineWidth=1;
+        ctx.beginPath();
+        var cy=H*0.5;ctx.moveTo(sw*0.15,cy);
+        ctx.lineTo(sw*0.35,cy-H*0.12);ctx.lineTo(sw*0.55,cy+H*0.1);ctx.lineTo(sw*0.8,cy-H*0.05);
+        ctx.stroke();
+        ctx.restore();
+        // Chiseled right edge of the slab
+        ctx.fillStyle='rgba(255,255,255,0.07)';ctx.fillRect(sw-1.5,0,1.5,H);
+        ctx.fillStyle='rgba(0,0,0,0.30)';ctx.fillRect(sw,0,2,H);
+      }
     } else if(flame){
       // Full-width fiery bar with flame particles
       drawBar(1,'rgba(255,90,0,0.8)','rgba(200,30,0,0.6)',0);
