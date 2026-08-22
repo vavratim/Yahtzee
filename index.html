@@ -17,6 +17,7 @@
      so the dice always fill whatever vertical space is actually available. */
   --slot:120px;
   --die:117px;
+  --dice-vshift:0px;
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body{height:100%;overflow:hidden}
@@ -50,14 +51,14 @@ body{font-family:-apple-system,'SF Pro Display','Helvetica Neue',sans-serif;back
   padding:1px 3px;
   position:relative;
 }
-.die-slot{width:var(--slot);height:var(--slot);position:relative;flex-shrink:0;display:flex;align-items:center;justify-content:center;margin:var(--slot-squeeze,0) 0}
+.die-slot{width:var(--slot);height:var(--slot);position:relative;flex-shrink:0;display:flex;align-items:center;justify-content:center;margin:var(--slot-squeeze,0) 0;transform:translateY(var(--dice-vshift,0px))}
 .die-wrap{width:var(--die);height:var(--die);cursor:pointer;position:relative;user-select:none;-webkit-user-select:none;overflow:hidden;border-radius:calc(var(--die) * .085)}
 .die-wrap:active{transform:scale(.86)}
 .die-wrap.rolling{opacity:1}/* Three.js handles roll animation */
 .held-ring{position:absolute;inset:-2px;border-radius:calc(var(--die) * .085);border:2px solid #40916c;pointer-events:none}
 .btn-swap{position:absolute;top:5px;left:5px;right:5px;width:calc(100% - 10px);background:rgba(255,255,255,.1);color:var(--text);border:none;border-radius:8px;padding:7px 0;font-size:22px;cursor:pointer;-webkit-appearance:none;z-index:2}
 .btn-swap:active{background:rgba(255,255,255,.18)}
-.dice-controls{margin-top:0;width:100%;display:flex;flex-direction:column;align-items:center;gap:2px}
+.dice-controls{margin-top:0;width:100%;display:flex;flex-direction:column;align-items:center;gap:2px;transform:translateY(var(--dice-vshift,0px))}
 .pips{display:flex;gap:3px}
 .pip{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.14);transition:background .2s}
 .pip.on{background:var(--accent)}
@@ -262,6 +263,10 @@ input[type=range].setting-slider::-webkit-slider-thumb{-webkit-appearance:none;w
     <div class="setting-row">
       <div class="setting-label"><span>Dice spacing</span><span id="lbl-dice-gap">0</span>px</div>
       <input type="range" class="setting-slider" id="sl-dice-gap" min="-18" max="30" step="1" oninput="applySettings()">
+    </div>
+    <div class="setting-row">
+      <div class="setting-label"><span>Dice position</span><span id="lbl-dice-vshift">0</span>px</div>
+      <input type="range" class="setting-slider" id="sl-dice-vshift" min="-80" max="80" step="1" oninput="applySettings()">
     </div>
     <button class="settings-reset" onclick="swapSides()" style="margin-bottom:6px;color:rgba(255,255,255,.6);">⇄ Swap dice / scores sides</button>
     <button class="settings-reset" onclick="resetSettings()">Reset to defaults</button>
@@ -1347,6 +1352,7 @@ var VERSION_LOG=[
   {v:'2.9', note:'Gap between dice halved again: cubes scale up to 1.12 at rest (shrinking back while they tumble so corners still clear), Dice-to-button margin removed.'},
   {v:'3.0', note:'Settings sliders rewired: Dice size is now 50-100% of the largest size that fits (it was writing to a CSS variable nothing read), and Dice position was replaced by Dice spacing, -18px to +30px between dice.'},
   {v:'3.1', note:'Yahtzee celebration added: confetti burst + banner plays whenever a Yahtzee is scored. Double and triple Yahtzees in the same game get progressively bigger bursts, bolder text and a screen shake on the third.'},
+  {v:'3.2', note:'New settings slider: Dice position shifts the dice + roll button stack up or down within the dice panel, independent of dice size and spacing.'},
 ];
 
 function toggleVerLog(){
@@ -1840,7 +1846,7 @@ function render(){renderDice();fitDice();renderScorecard();document.getElementBy
 
 // ── Settings ─────────────────────────────────────────────────
 var SETTINGS_KEY='yahtzee_settings_v2';
-var SETTINGS_DEFAULTS={rowHeight:32,headerSize:20,diceScale:100,diceGap:0};
+var SETTINGS_DEFAULTS={rowHeight:32,headerSize:20,diceScale:100,diceGap:0,diceVshift:0};
 var currentSettings={};
 
 function loadSettings(){
@@ -1864,10 +1870,12 @@ function syncSliders(){
   document.getElementById('sl-header').value=currentSettings.headerSize;
   document.getElementById('sl-dice-size').value=currentSettings.diceScale;
   document.getElementById('sl-dice-gap').value=currentSettings.diceGap;
+  document.getElementById('sl-dice-vshift').value=currentSettings.diceVshift;
   document.getElementById('lbl-row-height').textContent=currentSettings.rowHeight;
   document.getElementById('lbl-header').textContent=currentSettings.headerSize;
   document.getElementById('lbl-dice-size').textContent=currentSettings.diceScale;
   document.getElementById('lbl-dice-gap').textContent=currentSettings.diceGap;
+  document.getElementById('lbl-dice-vshift').textContent=currentSettings.diceVshift;
 }
 function applySettings(){
   // Read from sliders
@@ -1875,17 +1883,20 @@ function applySettings(){
   var hs=+document.getElementById('sl-header').value;
   var ds=+document.getElementById('sl-dice-size').value;
   var dg=+document.getElementById('sl-dice-gap').value;
-  currentSettings={rowHeight:rh,headerSize:hs,diceScale:ds,diceGap:dg};
+  var dv=+document.getElementById('sl-dice-vshift').value;
+  currentSettings={rowHeight:rh,headerSize:hs,diceScale:ds,diceGap:dg,diceVshift:dv};
   saveSettings(currentSettings);
   // Update labels
   document.getElementById('lbl-row-height').textContent=rh;
   document.getElementById('lbl-header').textContent=hs;
   document.getElementById('lbl-dice-size').textContent=ds;
   document.getElementById('lbl-dice-gap').textContent=dg;
+  document.getElementById('lbl-dice-vshift').textContent=dv;
   // Apply via CSS custom properties
   var root=document.documentElement;
   root.style.setProperty('--row-max-height',rh+'px');
   root.style.setProperty('--header-font',hs+'px');
+  root.style.setProperty('--dice-vshift',dv+'px');
   // Dice sliders feed fitDice(), which owns the actual sizing
   DIE_SCALE_PCT=ds;
   DIE_GAP_PX=dg;
