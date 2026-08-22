@@ -40,14 +40,14 @@ body{font-family:-apple-system,'SF Pro Display','Helvetica Neue',sans-serif;back
 
 /* ── Dice panel ── */
 .dice-panel{
-  width:118px;flex-shrink:0;
+  width:88px;flex-shrink:0;
   background:var(--surface);border-radius:var(--radius);
-  display:flex;flex-direction:column;align-items:center;justify-content:flex-start;
-  padding:40px 5px 6px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:6px 5px;
   position:relative;
 }
-.die-slot{width:108px;height:86px;position:relative;flex-shrink:0;display:flex;align-items:center;justify-content:center;margin:-2px 0}
-.die-wrap{width:104px;height:104px;cursor:pointer;position:relative;user-select:none;-webkit-user-select:none;overflow:hidden;border-radius:16px}
+.die-slot{width:76px;height:76px;position:relative;flex-shrink:0;display:flex;align-items:center;justify-content:center;margin:1px 0}
+.die-wrap{width:72px;height:72px;cursor:pointer;position:relative;user-select:none;-webkit-user-select:none;overflow:hidden;border-radius:12px}
 .die-wrap:active{transform:scale(.86)}
 .die-wrap.rolling{opacity:1}/* Three.js handles roll animation */
 .held-ring{position:absolute;inset:-2px;border-radius:12px;border:2px solid #40916c;pointer-events:none}
@@ -389,7 +389,7 @@ function createDieScene(container,origIdx,value,isHeld,isEmpty){
     if(oldCanvas)oldCanvas.remove();
   }
 
-  var W=container.clientWidth||104,H=container.clientHeight||104;
+  var W=container.clientWidth||72,H=container.clientHeight||72;
   var renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
   renderer.setSize(W,H);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
@@ -885,6 +885,67 @@ function toggleSection(){
   renderScorecard();
 }
 
+// Slide the dice into their sorted slots BEFORE the roll animation starts.
+// FLIP: measure, reparent into the new order, then animate from the old offsets to zero.
+var REORDER_MS=420;
+function animateReorder(done){
+  var panel=document.getElementById('dice-panel');
+  var slots=Array.prototype.slice.call(panel.querySelectorAll('.die-slot'));
+  if(slots.length<5){done();return;}
+  var order=orderedDiceSlots();
+
+  // FIRST: where each die is now
+  var first={},anyWrap=false;
+  for(var i=0;i<5;i++){
+    var w0=diceWraps[i];
+    if(w0&&w0.isConnected){first[i]=w0.getBoundingClientRect().top;anyWrap=true;}
+  }
+  if(!anyWrap){done();return;}
+
+  // Does anything actually move?
+  var changed=false;
+  for(var s=0;s<5;s++){
+    if(slots[s].firstElementChild!==diceWraps[order.origIdx[s]]){changed=true;break;}
+  }
+  if(!changed){done();return;}
+
+  // Reparent: detach all first so slots never briefly hold two dice
+  for(var i=0;i<5;i++){
+    var w1=diceWraps[i];
+    if(w1&&w1.parentNode)w1.parentNode.removeChild(w1);
+  }
+  for(var s=0;s<5;s++){
+    var w2=diceWraps[order.origIdx[s]];
+    if(w2)slots[s].appendChild(w2);
+  }
+
+  // LAST + INVERT: offset each die back to where it was
+  var moving=[];
+  for(var i=0;i<5;i++){
+    var w3=diceWraps[i];
+    if(!w3||first[i]===undefined)continue;
+    var dy=first[i]-w3.getBoundingClientRect().top;
+    w3.style.transition='none';
+    w3.style.transform=dy?'translateY('+dy.toFixed(1)+'px)':'';
+    if(dy)w3.style.zIndex='4';
+    moving.push(w3);
+  }
+
+  // PLAY: release them into place with a little overshoot
+  requestAnimationFrame(function(){
+    requestAnimationFrame(function(){
+      moving.forEach(function(w){
+        w.style.transition='transform '+REORDER_MS+'ms cubic-bezier(.34,1.32,.5,1)';
+        w.style.transform='translateY(0)';
+      });
+    });
+  });
+  setTimeout(function(){
+    moving.forEach(function(w){w.style.transition='';w.style.transform='';w.style.zIndex='';});
+    done();
+  },REORDER_MS+40);
+}
+
 function rollDice(){
   if(gameOver){
     dice=[0,0,0,0,0];held=[false,false,false,false,false];
@@ -905,20 +966,23 @@ function rollDice(){
   var doneCount=0,freeCount=0;
   for(var i=0;i<5;i++)if(!held[i])freeCount++;
   if(freeCount===0){rolling=false;return;}
-  for(var i=0;i<5;i++){
-    if(!held[i]){
-      (function(idx,val){
-        rollDieTo(idx,val,function(){
-          doneCount++;
-          if(doneCount>=freeCount){
-            dice=newDice.slice();
-            rollCount++;rolling=false;
-            render();
-          }
-        });
-      })(i,newDice[i]);
+  // Sort the dice into position first, THEN spin them
+  animateReorder(function(){
+    for(var i=0;i<5;i++){
+      if(!held[i]){
+        (function(idx,val){
+          rollDieTo(idx,val,function(){
+            doneCount++;
+            if(doneCount>=freeCount){
+              dice=newDice.slice();
+              rollCount++;rolling=false;
+              render();
+            }
+          });
+        })(i,newDice[i]);
+      }
     }
-  }
+  });
 }
 
 function toggleHold(origIdx){
@@ -1037,9 +1101,8 @@ var VERSION_LOG=[
   {v:'2.1', note:'Three.js 3D dice with real roll animation. Liquid physics bars that slosh with phone tilt. Flame effect on 100% bars. Gyroscope integration.'},
   {v:'2.2', note:'Fixed probability bars not rendering (NaN in liquid physics). Bars now fill horizontally left-to-right, green=free odds, yellow=held odds, with tilt slosh and flames at 100%.'},
   {v:'2.3', note:'Locked-in scores now show a carved dark-stone slab instead of a gray bar. Dice enlarged.'},
-  {v:'2.4', note:'Dice made much larger.'},
-  {v:'2.5', note:'Dice squeezed together vertically.'},
-  {v:'2.6', note:'Locked-in scores always stone; no longer catch fire at max value.'},
+  {v:'2.4', note:'Selected lines are always stone (no flame). Slab width = how much of the category was achieved: upper = dice counted / 3, full house / straights / Yahtzee = all-or-nothing, 3-of-a-kind vs 18, 4-of-a-kind vs 24, chance vs 30.'},
+  {v:'2.5', note:'Dice slide into their sorted order before the roll animation instead of snapping afterward. After the third roll the bars show what was actually achieved (same scale as the stone), so selecting a row hands off to the slab at the identical length.'},
 ];
 
 function toggleVerLog(){
@@ -1290,6 +1353,18 @@ function animateRowCanvas(canvas,catId,targetLevel,isFlame,isGray){
     if(typeof tl==='number'){tGray=tl;}
     else if(tl&&typeof tl==='object'){tGreen=tl.green||0;tYellow=tl.yellow||0;}
 
+    // Handoff: when a row locks in, the stone starts at exactly the length the
+    // liquid bar was, so selecting a category doesn't make the fill jump or regrow.
+    if(gray){
+      if(!st.wasGray){
+        st.gray=Math.max(st.gray||0,st.green||0,st.yellow||0);
+        st.green=0;st.yellow=0;st.gvel=0;st.yvel=0;st.grvel=0;
+        st.wasGray=true;
+      }
+    } else {
+      st.wasGray=false;
+    }
+
     // Spring the levels toward targets
     var spring=0.12,damp=0.75;
     st.gvel=(st.gvel||0)+((tGreen-st.green)*spring);st.gvel*=damp;st.green+=st.gvel;
@@ -1335,34 +1410,48 @@ function animateRowCanvas(canvas,catId,targetLevel,isFlame,isGray){
     }
 
     if(gray){
-      // Dark stone slab covering the whole row when locked in
-      var sgrd=ctx.createLinearGradient(0,0,0,H);
-      sgrd.addColorStop(0,'#2b2b33');
-      sgrd.addColorStop(0.5,'#212127');
-      sgrd.addColorStop(1,'#17171c');
-      ctx.fillStyle=sgrd;
+      // Stone slab fills only as far as the score got (upper: dice counted / 3)
+      var sw=Math.max(0,Math.min(1,st.gray))*W;
+      // Empty recess behind the slab so a used row still reads as used at 0
+      ctx.fillStyle='rgba(0,0,0,0.22)';
       ctx.fillRect(0,0,W,H);
-      // Mottled stone speckle (deterministic per catId so it doesn't shimmer)
-      if(!st.stoneSpots){
-        st.stoneSpots=[];
-        var seed=0;for(var ci=0;ci<catId.length;ci++)seed+=catId.charCodeAt(ci);
-        function sr(){seed=(seed*9301+49297)%233280;return seed/233280;}
-        for(var sp=0;sp<26;sp++){st.stoneSpots.push({x:sr(),y:sr(),r:sr()*2+0.5,l:sr()});}
+      ctx.fillStyle='rgba(255,255,255,0.03)';
+      ctx.fillRect(0,H-1,W,1);
+      if(sw>0.5){
+        ctx.save();
+        ctx.beginPath();ctx.rect(0,0,sw,H);ctx.clip();
+        var sgrd=ctx.createLinearGradient(0,0,0,H);
+        sgrd.addColorStop(0,'#2b2b33');
+        sgrd.addColorStop(0.5,'#212127');
+        sgrd.addColorStop(1,'#17171c');
+        ctx.fillStyle=sgrd;
+        ctx.fillRect(0,0,sw,H);
+        // Mottled stone speckle (deterministic per catId so it doesn't shimmer)
+        if(!st.stoneSpots){
+          st.stoneSpots=[];
+          var seed=0;for(var ci=0;ci<catId.length;ci++)seed+=catId.charCodeAt(ci);
+          function sr(){seed=(seed*9301+49297)%233280;return seed/233280;}
+          for(var sp=0;sp<26;sp++){st.stoneSpots.push({x:sr(),y:sr(),r:sr()*2+0.5,l:sr()});}
+        }
+        st.stoneSpots.forEach(function(s2){
+          var shade=s2.l>0.5?255:0;
+          ctx.fillStyle='rgba('+shade+','+shade+','+shade+','+(0.04+s2.l*0.05).toFixed(3)+')';
+          ctx.beginPath();ctx.arc(s2.x*sw,s2.y*H,s2.r,0,Math.PI*2);ctx.fill();
+        });
+        // Top bevel highlight + bottom shadow for carved look
+        ctx.fillStyle='rgba(255,255,255,0.05)';ctx.fillRect(0,0,sw,1.5);
+        ctx.fillStyle='rgba(0,0,0,0.35)';ctx.fillRect(0,H-2,sw,2);
+        // A subtle engraved crack, scaled to the slab
+        ctx.strokeStyle='rgba(0,0,0,0.25)';ctx.lineWidth=1;
+        ctx.beginPath();
+        var cy=H*0.5;ctx.moveTo(sw*0.15,cy);
+        ctx.lineTo(sw*0.35,cy-H*0.12);ctx.lineTo(sw*0.55,cy+H*0.1);ctx.lineTo(sw*0.8,cy-H*0.05);
+        ctx.stroke();
+        ctx.restore();
+        // Chiseled right edge of the slab
+        ctx.fillStyle='rgba(255,255,255,0.07)';ctx.fillRect(sw-1.5,0,1.5,H);
+        ctx.fillStyle='rgba(0,0,0,0.30)';ctx.fillRect(sw,0,2,H);
       }
-      st.stoneSpots.forEach(function(s2){
-        var shade=s2.l>0.5?255:0;
-        ctx.fillStyle='rgba('+shade+','+shade+','+shade+','+(0.04+s2.l*0.05).toFixed(3)+')';
-        ctx.beginPath();ctx.arc(s2.x*W,s2.y*H,s2.r,0,Math.PI*2);ctx.fill();
-      });
-      // Top bevel highlight + bottom shadow for carved look
-      ctx.fillStyle='rgba(255,255,255,0.05)';ctx.fillRect(0,0,W,1.5);
-      ctx.fillStyle='rgba(0,0,0,0.35)';ctx.fillRect(0,H-2,W,2);
-      // A subtle engraved crack
-      ctx.strokeStyle='rgba(0,0,0,0.25)';ctx.lineWidth=1;
-      ctx.beginPath();
-      var cy=H*0.5;ctx.moveTo(W*0.15,cy);
-      ctx.lineTo(W*0.35,cy-H*0.12);ctx.lineTo(W*0.55,cy+H*0.1);ctx.lineTo(W*0.8,cy-H*0.05);
-      ctx.stroke();
     } else if(flame){
       // Full-width fiery bar with flame particles
       drawBar(1,'rgba(255,90,0,0.8)','rgba(200,30,0,0.6)',0);
@@ -1392,6 +1481,17 @@ function animateRowCanvas(canvas,catId,targetLevel,isFlame,isGray){
     }
   }
   frame();
+}
+
+// How much of a category a given score represents (0..1).
+// Shared by the final-roll bar and the stone slab so the two are always the same length.
+function achievedPct(catId,isUpper,targetNum,scoreVal){
+  scoreVal=scoreVal||0;
+  if(isUpper)return clamp01(scoreVal/(targetNum*3));           // dice counted / 3
+  if(catId==='fh'||catId==='ss'||catId==='ls'||catId==='yh')   // all-or-nothing
+    return scoreVal>0?1:0;
+  var mx={'3k':18,'4k':24,'ch':30}[catId]||30;                 // sum vs. best possible sum
+  return clamp01(scoreVal/mx);
 }
 
 function makeRow(cat,isUpper,targetNum,rl){
@@ -1431,13 +1531,16 @@ function makeRow(cat,isUpper,targetNum,rl){
   var targetLevel;
 
   if(used){
+    // A selected line is ALWAYS stone — never flame. Only the fill width varies.
     isGray=true;
-    var actual=scores[catId]||0;
-    var pctGray=0;
-    if(isUpper){pctGray=clamp01(actual/(targetNum*3));}
-    else{var mx={'3k':30,'4k':30,'fh':25,'ss':30,'ls':40,'yh':50,'ch':30}[catId]||30;pctGray=clamp01(actual/mx);}
-    targetLevel=pctGray;
-    // locked scores are always stone, never flames
+    isFlame=false;
+    targetLevel=achievedPct(catId,isUpper,targetNum,scores[catId]||0);
+  } else if(rolled&&!jokerBlocked&&rl===0){
+    // No rolls left: odds are meaningless, so show what the dice actually achieved.
+    // Same scale as the stone slab, so selecting the row keeps the bar exactly as long.
+    var fp=achievedPct(catId,isUpper,targetNum,curScore||0);
+    targetLevel={green:fp,yellow:0};
+    if(fp>=0.999)isFlame=true;
   } else if(rolled&&!jokerBlocked){
     var dp={held:0,free:0};
     if(isUpper){dp.held=pUpperHeld(targetNum,rl);dp.free=pUpperFree(targetNum,rl);}
