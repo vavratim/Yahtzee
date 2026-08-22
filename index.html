@@ -13,6 +13,10 @@
   --max-rolls:3;--upper-bonus-score:35;--upper-bonus-target:63;
   --bg:#1a1a2e;--surface:#16213e;--accent:#e94560;--accent2:#f5a623;
   --text:#eaeaea;--muted:#7a8499;--green:#40916c;--radius:10px;
+  /* Fallbacks only — fitDice() measures the panel and overwrites these at runtime
+     so the dice always fill whatever vertical space is actually available. */
+  --slot:120px;
+  --die:117px;
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body{height:100%;overflow:hidden}
@@ -22,8 +26,8 @@ body{font-family:-apple-system,'SF Pro Display','Helvetica Neue',sans-serif;back
   display:flex;flex-direction:column;
   height:100vh;height:-webkit-fill-available;
   max-width:430px;margin:0 auto;
-  padding:env(safe-area-inset-top,5px) 8px env(safe-area-inset-bottom,3px);
-  gap:4px;
+  padding:env(safe-area-inset-top,4px) 5px env(safe-area-inset-bottom,3px);
+  gap:3px;
 }
 
 /* Header */
@@ -34,32 +38,32 @@ body{font-family:-apple-system,'SF Pro Display','Helvetica Neue',sans-serif;back
 .total-wrap .val{font-size:40px;font-weight:700;line-height:1}
 
 /* Main row */
-.main-row{display:flex;gap:5px;flex:1;min-height:0}
+.main-row{display:flex;gap:4px;flex:1;min-height:0}
 /* swap: dice right */
 .main-row.swapped{flex-direction:row-reverse}
 
 /* ── Dice panel ── */
 .dice-panel{
-  width:88px;flex-shrink:0;
+  width:calc(var(--slot) + 6px);flex-shrink:0;
   background:var(--surface);border-radius:var(--radius);
   display:flex;flex-direction:column;align-items:center;justify-content:center;
-  padding:6px 5px;
+  padding:1px 3px;
   position:relative;
 }
-.die-slot{width:76px;height:76px;position:relative;flex-shrink:0;display:flex;align-items:center;justify-content:center;margin:1px 0}
-.die-wrap{width:72px;height:72px;cursor:pointer;position:relative;user-select:none;-webkit-user-select:none;overflow:hidden;border-radius:12px}
+.die-slot{width:var(--slot);height:var(--slot);position:relative;flex-shrink:0;display:flex;align-items:center;justify-content:center;margin:var(--slot-squeeze,0) 0}
+.die-wrap{width:var(--die);height:var(--die);cursor:pointer;position:relative;user-select:none;-webkit-user-select:none;overflow:hidden;border-radius:calc(var(--die) * .085)}
 .die-wrap:active{transform:scale(.86)}
 .die-wrap.rolling{opacity:1}/* Three.js handles roll animation */
-.held-ring{position:absolute;inset:-2px;border-radius:12px;border:2px solid #40916c;pointer-events:none}
+.held-ring{position:absolute;inset:-2px;border-radius:calc(var(--die) * .085);border:2px solid #40916c;pointer-events:none}
 .btn-swap{position:absolute;top:5px;left:5px;right:5px;width:calc(100% - 10px);background:rgba(255,255,255,.1);color:var(--text);border:none;border-radius:8px;padding:7px 0;font-size:22px;cursor:pointer;-webkit-appearance:none;z-index:2}
 .btn-swap:active{background:rgba(255,255,255,.18)}
-.dice-controls{margin-top:4px;width:100%;display:flex;flex-direction:column;align-items:center;gap:4px}
+.dice-controls{margin-top:0;width:100%;display:flex;flex-direction:column;align-items:center;gap:2px}
 .pips{display:flex;gap:3px}
 .pip{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.14);transition:background .2s}
 .pip.on{background:var(--accent)}
 .btn-roll{
   background:var(--accent);color:#fff;border:none;border-radius:7px;
-  padding:7px 0;width:100%;font-size:13px;font-weight:600;
+  padding:21px 0;width:100%;font-size:15px;font-weight:600;
   cursor:pointer;-webkit-appearance:none;transition:transform .1s,opacity .15s;
 }
 .btn-roll:active{transform:scale(.93)}
@@ -225,12 +229,12 @@ input[type=range].setting-slider::-webkit-slider-thumb{-webkit-appearance:none;w
       <input type="range" class="setting-slider" id="sl-header" min="14" max="130" step="1" oninput="applySettings()">
     </div>
     <div class="setting-row">
-      <div class="setting-label"><span>Dice size</span><span id="lbl-dice-size">56</span></div>
-      <input type="range" class="setting-slider" id="sl-dice-size" min="36" max="68" step="2" oninput="applySettings()">
+      <div class="setting-label"><span>Dice size</span><span id="lbl-dice-size">100</span>%</div>
+      <input type="range" class="setting-slider" id="sl-dice-size" min="50" max="100" step="2" oninput="applySettings()">
     </div>
     <div class="setting-row">
-      <div class="setting-label"><span>Dice position (top ↔ bottom)</span><span id="lbl-dice-pos">50</span>%</div>
-      <input type="range" class="setting-slider" id="sl-dice-pos" min="0" max="100" step="5" oninput="applySettings()">
+      <div class="setting-label"><span>Dice spacing</span><span id="lbl-dice-gap">0</span>px</div>
+      <input type="range" class="setting-slider" id="sl-dice-gap" min="-18" max="30" step="1" oninput="applySettings()">
     </div>
     <button class="settings-reset" onclick="swapSides()" style="margin-bottom:6px;color:rgba(255,255,255,.6);">⇄ Swap dice / scores sides</button>
     <button class="settings-reset" onclick="resetSettings()">Reset to defaults</button>
@@ -380,6 +384,14 @@ function makeEmptyTexture(isHeld){
   return tex;
 }
 
+// How far back the die camera sits. Lower = cube fills more of its canvas.
+// 1.73 is the cube's diagonal, so this is about as close as it can get without
+// the corners clipping mid-tumble.
+var DIE_CAM_Z=2.15;
+// At rest the die is scaled up to fill its box; while rolling it shrinks back to 1.0
+// so the spinning corners still have clearance. This is what closes the visual gap.
+var DIE_IDLE_SCALE=1.12;
+
 function createDieScene(container,origIdx,value,isHeld,isEmpty){
   // Cleanup existing
   if(threeRAFs[origIdx])cancelAnimationFrame(threeRAFs[origIdx]);
@@ -394,13 +406,13 @@ function createDieScene(container,origIdx,value,isHeld,isEmpty){
   renderer.setSize(W,H);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
   renderer.setClearColor(0x000000,0);
-  renderer.domElement.style.cssText='position:absolute;inset:0;width:100%;height:100%;border-radius:10px;';
+  renderer.domElement.style.cssText='position:absolute;inset:0;width:100%;height:100%;border-radius:inherit;';
   container.style.position='relative';
   container.appendChild(renderer.domElement);
 
   var scene=new THREE.Scene();
   var camera=new THREE.PerspectiveCamera(45,W/H,0.1,100);
-  camera.position.z=2.8;
+  camera.position.z=DIE_CAM_Z;
 
   // Lighting
   var amb=new THREE.AmbientLight(0xffffff,0.7);scene.add(amb);
@@ -419,6 +431,7 @@ function createDieScene(container,origIdx,value,isHeld,isEmpty){
 
   var geo=new THREE.BoxGeometry(1,1,1);
   var cube=new THREE.Mesh(geo,mats);
+  cube.scale.setScalar(DIE_IDLE_SCALE);
   scene.add(cube);
 
   // Set initial rotation to show correct face
@@ -461,10 +474,64 @@ function createDieScene(container,origIdx,value,isHeld,isEmpty){
       cube.rotation.x+=Math.sin(t+origIdx)*0.001;
       cube.rotation.y+=Math.cos(t*0.7+origIdx)*0.001;
     }
+    // Ease between rolling size and resting size
+    var wantScale=anim.active?1:DIE_IDLE_SCALE;
+    if(Math.abs(cube.scale.x-wantScale)>0.002)cube.scale.setScalar(cube.scale.x+(wantScale-cube.scale.x)*0.18);
+    else cube.scale.setScalar(wantScale);
     renderer.render(scene,camera);
   }
   loop();
 }
+
+// Keep the WebGL buffers in step whenever the die boxes change size.
+function resizeDiceRenderers(){
+  for(var i=0;i<5;i++){
+    var r=threeRenderers[i],w=diceWraps[i];
+    if(!r||!w||!w.isConnected)continue;
+    var W=w.clientWidth||72,H=w.clientHeight||72;
+    if(!W||!H)continue;
+    r.setSize(W,H);
+    var cam=threeCameras[i];
+    if(cam){cam.aspect=W/H;cam.updateProjectionMatrix();}
+    r.domElement.style.width='100%';r.domElement.style.height='100%';
+  }
+}
+
+// Size the dice to the space that's actually there: measure the row, take off the
+// roll controls and padding, split what's left five ways. Also capped by width so
+// the dice column can't crowd out the scorecard.
+var MAX_SLOT=92;
+// Driven by the settings sliders. 100% = as big as the space allows (capped at
+// MAX_SLOT), 50% = half that. Gap is extra pixels between die boxes; negative
+// overlaps them into the dead space around each cube.
+var DIE_SCALE_PCT=100;
+var DIE_GAP_PX=0;
+
+function fitDice(){
+  var panel=document.getElementById('dice-panel');
+  var row=document.querySelector('.main-row');
+  if(!panel||!row)return;
+  var rowH=row.clientHeight,rowW=row.clientWidth;
+  if(!rowH||!rowW)return;
+  var ctrl=panel.querySelector('.dice-controls');
+  var ctrlH=ctrl?ctrl.getBoundingClientRect().height:74;
+  var byHeight=(rowH-ctrlH-4)/5;     // 4 = panel padding
+  var byWidth=rowW*0.46-6;           // leave the scorecard at least ~54%
+  // MAX_SLOT keeps the column tight: with the camera pulled in, a 92px box shows a
+  // bigger die than the old 110px box did, so extra height stays as breathing room
+  // rather than pushing the dice apart.
+  // The gap eats into the height budget, so account for it before dividing
+  var gap=DIE_GAP_PX;
+  var budget=Math.min(byHeight-gap*0.8,byWidth,MAX_SLOT);
+  var slot=Math.max(30,budget*(DIE_SCALE_PCT/100));
+  var root=document.documentElement;
+  root.style.setProperty('--slot',slot.toFixed(1)+'px');
+  root.style.setProperty('--die',(slot-1).toFixed(1)+'px');
+  root.style.setProperty('--slot-squeeze',(gap/2).toFixed(1)+'px');
+  requestAnimationFrame(resizeDiceRenderers);
+}
+window.addEventListener('resize',fitDice);
+window.addEventListener('orientationchange',function(){setTimeout(fitDice,150)});
 
 function rollDieTo(origIdx,newValue,onDone){
   var cube=threeCubes[origIdx];
@@ -509,6 +576,36 @@ var chartBin=20; // histogram bucket size in points
 var gameOver=false;
 
 // ── Dice ordering ─────────────────────────────────────────────
+// Display order is frozen at roll time so nothing snaps around after the dice land.
+var slotOrder=null;
+
+// Order used from the moment Roll is pressed: held dice keep their sorted grouping at
+// the top, everything being rerolled drops to the bottom to tumble together.
+function rollSlotOrder(){
+  var o=orderedDiceSlots();
+  var h=[],f=[],seen={};
+  for(var s=0;s<5;s++){
+    var oi=o.origIdx[s];
+    if(oi===undefined||oi<0||seen[oi])continue;
+    seen[oi]=true;
+    (held[oi]?h:f).push(oi);
+  }
+  for(var i=0;i<5;i++)if(!seen[i])(held[i]?h:f).push(i);
+  return h.concat(f);
+}
+
+// Slots to draw right now: the frozen roll order if there is one, else the natural sort.
+function currentSlots(){
+  if(slotOrder&&slotOrder.length===5){
+    return{
+      slots:slotOrder.map(function(i){return dice[i]}),
+      heldSlots:slotOrder.map(function(i){return !!held[i]}),
+      origIdx:slotOrder.slice()
+    };
+  }
+  return orderedDiceSlots();
+}
+
 function detectIntent(){
   var hv=[];for(var i=0;i<5;i++)if(held[i])hv.push(dice[i]);
   if(!hv.length)return'none';
@@ -862,7 +959,7 @@ function initConstants(){
 }
 
 function newGame(){
-  dice=[0,0,0,0,0];held=[false,false,false,false,false];
+  dice=[0,0,0,0,0];held=[false,false,false,false,false];slotOrder=null;
   rollCount=0;scores={};rolling=false;yahtzeeBonus=0;gameOver=false;
   document.getElementById('overlay').classList.remove('show');
   render();
@@ -888,11 +985,10 @@ function toggleSection(){
 // Slide the dice into their sorted slots BEFORE the roll animation starts.
 // FLIP: measure, reparent into the new order, then animate from the old offsets to zero.
 var REORDER_MS=420;
-function animateReorder(done){
+function animateReorder(order,done){
   var panel=document.getElementById('dice-panel');
   var slots=Array.prototype.slice.call(panel.querySelectorAll('.die-slot'));
   if(slots.length<5){done();return;}
-  var order=orderedDiceSlots();
 
   // FIRST: where each die is now
   var first={},anyWrap=false;
@@ -905,7 +1001,7 @@ function animateReorder(done){
   // Does anything actually move?
   var changed=false;
   for(var s=0;s<5;s++){
-    if(slots[s].firstElementChild!==diceWraps[order.origIdx[s]]){changed=true;break;}
+    if(slots[s].firstElementChild!==diceWraps[order[s]]){changed=true;break;}
   }
   if(!changed){done();return;}
 
@@ -915,7 +1011,7 @@ function animateReorder(done){
     if(w1&&w1.parentNode)w1.parentNode.removeChild(w1);
   }
   for(var s=0;s<5;s++){
-    var w2=diceWraps[order.origIdx[s]];
+    var w2=diceWraps[order[s]];
     if(w2)slots[s].appendChild(w2);
   }
 
@@ -948,7 +1044,7 @@ function animateReorder(done){
 
 function rollDice(){
   if(gameOver){
-    dice=[0,0,0,0,0];held=[false,false,false,false,false];
+    dice=[0,0,0,0,0];held=[false,false,false,false,false];slotOrder=null;
     rollCount=0;scores={};rolling=false;yahtzeeBonus=0;gameOver=false;
     // Reset Three.js scenes for new game
     for(var ri=0;ri<5;ri++){
@@ -966,8 +1062,9 @@ function rollDice(){
   var doneCount=0,freeCount=0;
   for(var i=0;i<5;i++)if(!held[i])freeCount++;
   if(freeCount===0){rolling=false;return;}
-  // Sort the dice into position first, THEN spin them
-  animateReorder(function(){
+  // Freeze the layout, slide dice into it (rerolls drop to the bottom), THEN spin
+  slotOrder=rollSlotOrder();
+  animateReorder(slotOrder,function(){
     for(var i=0;i<5;i++){
       if(!held[i]){
         (function(idx,val){
@@ -1057,7 +1154,7 @@ function claimScore(id,val){
     yahtzeeBonus+=100;
   }
   scores[id]=val;
-  held=[false,false,false,false,false];rollCount=0;dice=[0,0,0,0,0];
+  held=[false,false,false,false,false];rollCount=0;dice=[0,0,0,0,0];slotOrder=null;
   render();
   var all=UPPER_CATS.concat(LOWER_CATS);
   if(all.every(function(c){return scores[c.id]!==undefined})){
@@ -1103,6 +1200,11 @@ var VERSION_LOG=[
   {v:'2.3', note:'Locked-in scores now show a carved dark-stone slab instead of a gray bar. Dice enlarged.'},
   {v:'2.4', note:'Selected lines are always stone (no flame). Slab width = how much of the category was achieved: upper = dice counted / 3, full house / straights / Yahtzee = all-or-nothing, 3-of-a-kind vs 18, 4-of-a-kind vs 24, chance vs 30.'},
   {v:'2.5', note:'Dice slide into their sorted order before the roll animation instead of snapping afterward. After the third roll the bars show what was actually achieved (same scale as the stone), so selecting a row hands off to the slab at the identical length.'},
+  {v:'2.6', note:'Roll sequence: held dice sort to the top, dice being rerolled slide to the bottom, then they spin in place. Layout is frozen for the turn so nothing jumps after the dice land.'},
+  {v:'2.7', note:'Dice and roll button enlarged; dice now measure the panel at runtime and scale to fill the available height (capped at 46% of width so the scorecard keeps its room). Panel padding and app margins trimmed to hand the extra space to the dice.'},
+  {v:'2.8', note:'Dice column condensed: camera pulled from z2.8 to z2.15 so each cube fills its box instead of floating in dead space, slot capped at 92px, and slot margins, panel padding and the dice-to-button gap all reduced.'},
+  {v:'2.9', note:'Gap between dice halved again: cubes scale up to 1.12 at rest (shrinking back while they tumble so corners still clear), Dice-to-button margin removed.'},
+  {v:'3.0', note:'Settings sliders rewired: Dice size is now 50-100% of the largest size that fits (it was writing to a CSS variable nothing read), and Dice position was replaced by Dice spacing, -18px to +30px between dice.'},
 ];
 
 function toggleVerLog(){
@@ -1178,7 +1280,7 @@ var diceWraps={}; // origIdx -> .die-wrap element (persists across renders for T
 
 function renderDice(){
   var panel=document.getElementById('dice-panel');
-  var order=orderedDiceSlots();
+  var order=currentSlots();
 
   // Remove die slots but keep three.js canvases alive
   var existingSlots=panel.querySelectorAll('.die-slot');
@@ -1592,17 +1694,17 @@ function makeRow(cat,isUpper,targetNum,rl){
   return row;
 }
 
-function render(){renderDice();renderScorecard();document.getElementById('total').textContent=calcTotal()}
+function render(){renderDice();fitDice();renderScorecard();document.getElementById('total').textContent=calcTotal()}
 
 // ── Settings ─────────────────────────────────────────────────
-var SETTINGS_KEY='yahtzee_settings_v1';
-var SETTINGS_DEFAULTS={rowHeight:32,headerSize:20,diceSize:56,dicePos:50};
+var SETTINGS_KEY='yahtzee_settings_v2';
+var SETTINGS_DEFAULTS={rowHeight:32,headerSize:20,diceScale:100,diceGap:0};
 var currentSettings={};
 
 function loadSettings(){
   try{
     var s=JSON.parse(localStorage.getItem(SETTINGS_KEY));
-    if(s)return s;
+    if(s)return Object.assign({},SETTINGS_DEFAULTS,s); // fill in any missing keys
   }catch(e){}
   return Object.assign({},SETTINGS_DEFAULTS);
 }
@@ -1618,45 +1720,34 @@ function resetSettings(){
 function syncSliders(){
   document.getElementById('sl-row-height').value=currentSettings.rowHeight;
   document.getElementById('sl-header').value=currentSettings.headerSize;
-  document.getElementById('sl-dice-size').value=currentSettings.diceSize;
-  document.getElementById('sl-dice-pos').value=currentSettings.dicePos;
+  document.getElementById('sl-dice-size').value=currentSettings.diceScale;
+  document.getElementById('sl-dice-gap').value=currentSettings.diceGap;
   document.getElementById('lbl-row-height').textContent=currentSettings.rowHeight;
   document.getElementById('lbl-header').textContent=currentSettings.headerSize;
-  document.getElementById('lbl-dice-size').textContent=currentSettings.diceSize;
-  document.getElementById('lbl-dice-pos').textContent=currentSettings.dicePos;
+  document.getElementById('lbl-dice-size').textContent=currentSettings.diceScale;
+  document.getElementById('lbl-dice-gap').textContent=currentSettings.diceGap;
 }
 function applySettings(){
   // Read from sliders
   var rh=+document.getElementById('sl-row-height').value;
   var hs=+document.getElementById('sl-header').value;
   var ds=+document.getElementById('sl-dice-size').value;
-  var dp=+document.getElementById('sl-dice-pos').value;
-  currentSettings={rowHeight:rh,headerSize:hs,diceSize:ds,dicePos:dp};
+  var dg=+document.getElementById('sl-dice-gap').value;
+  currentSettings={rowHeight:rh,headerSize:hs,diceScale:ds,diceGap:dg};
   saveSettings(currentSettings);
   // Update labels
   document.getElementById('lbl-row-height').textContent=rh;
   document.getElementById('lbl-header').textContent=hs;
   document.getElementById('lbl-dice-size').textContent=ds;
-  document.getElementById('lbl-dice-pos').textContent=dp;
+  document.getElementById('lbl-dice-gap').textContent=dg;
   // Apply via CSS custom properties
   var root=document.documentElement;
   root.style.setProperty('--row-max-height',rh+'px');
   root.style.setProperty('--header-font',hs+'px');
-  root.style.setProperty('--die-size',ds+'px');
-  // Dice position: justify-content of dice-panel
-  var panel=document.getElementById('dice-panel');
-  if(panel){
-    if(dp<=10)panel.style.justifyContent='flex-start';
-    else if(dp>=90)panel.style.justifyContent='flex-end';
-    else if(dp<=40)panel.style.justifyContent='flex-start';
-    else if(dp>=60)panel.style.justifyContent='flex-end';
-    else panel.style.justifyContent='center';
-    // More granular: use padding-top
-    var panelH=panel.clientHeight||500;
-    var diceH=ds*5+10*4; // 5 dice + margins
-    var maxPad=Math.max(0,panelH-diceH-80);
-    panel.style.paddingTop=Math.round((dp/100)*maxPad)+'px';
-  }
+  // Dice sliders feed fitDice(), which owns the actual sizing
+  DIE_SCALE_PCT=ds;
+  DIE_GAP_PX=dg;
+  fitDice();
   // Header size controls height/padding only — text size stays fixed
   var hdr=document.querySelector('.header');
   if(hdr){
