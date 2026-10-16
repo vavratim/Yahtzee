@@ -13,7 +13,22 @@
 <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
 <title>Yahtzee</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script type="importmap">
+{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js",
+  "postprocessing":"https://cdn.jsdelivr.net/npm/postprocessing@6.39.5/build/index.js"
+}}
+</script>
+<script type="module">
+// three dropped its UMD build, so the libraries load as modules and are
+// published onto window for the classic game script below. Module scripts are
+// deferred, so this runs after that script has defined __boot().
+import * as THREE from 'three';
+import * as POSTPROCESSING from 'postprocessing';
+window.THREE=THREE;
+window.POSTPROCESSING=POSTPROCESSING;
+if(window.__boot)window.__boot(); else window.__threeReady=true;
+</script>
 <style>
 :root{
   --max-rolls:3;--upper-bonus-score:35;--upper-bonus-target:63;
@@ -324,6 +339,7 @@ input[type=range].setting-slider::-webkit-slider-thumb{-webkit-appearance:none;w
       <div class="setting-label"><span>Effects</span><span></span></div>
       <div class="fx-toggles">
         <button class="fx-tgl" id="tg-fxLighting" onclick="toggleFx('fxLighting')">Lighting &amp; materials</button>
+        <button class="fx-tgl" id="tg-fxPost" onclick="toggleFx('fxPost')">Bloom &amp; post</button>
       </div>
     </div>
     <button class="settings-reset" onclick="swapSides()" style="margin-bottom:6px;color:rgba(255,255,255,.6);">⇄ Swap dice / scores sides</button>
@@ -432,15 +448,9 @@ var PIP_FACES={
   6:{faceIdx:5,pips:[[-0.25,-0.3],[0.25,-0.3],[-0.25,0],[0.25,0],[-0.25,0.3],[0.25,0.3]]}
 };
 
-// Face rotations so each face points toward camera (+Z)
-var FACE_QUATS=[
-  new THREE.Quaternion().setFromEuler(new THREE.Euler(0,-Math.PI/2,0)),     // +X face (1)
-  new THREE.Quaternion().setFromEuler(new THREE.Euler(0,Math.PI/2,0)),      // -X face (6)
-  new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI/2,0,0)),      // +Y face (2)
-  new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI/2,0,0)),     // -Y face (5)
-  new THREE.Quaternion(),                                                    // +Z face (3)
-  new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI,0,0)),        // -Z face (4)
-];
+// Face rotations so each face points toward camera (+Z). Built in
+// initThreeConsts() because THREE now loads as a deferred module.
+var FACE_QUATS=null;
 // Map die value to face quaternion index, and back
 var VALUE_TO_FACE={1:0,2:2,3:4,4:5,5:3,6:1};
 var FACE_TO_VALUE={};
@@ -480,7 +490,7 @@ function pipTexture(value,isHeld){
     });
   }
   var tex=new THREE.CanvasTexture(can);
-  tex.encoding=THREE.sRGBEncoding;
+  tex.colorSpace=THREE.SRGBColorSpace;
   tex.anisotropy=4;
   // The same texture doubles as the bump map: three samples bumpMap as raw
   // height data regardless of .encoding, so the dark pips read as drilled
@@ -507,8 +517,8 @@ function makeStudioEnv(renderer){
   });
   var tex=new THREE.CanvasTexture(c);
   tex.mapping=THREE.EquirectangularReflectionMapping;
+  tex.colorSpace=THREE.SRGBColorSpace;
   var pm=new THREE.PMREMGenerator(renderer);
-  pm.compileEquirectangularShader();
   var env=pm.fromEquirectangular(tex).texture;
   pm.dispose();tex.dispose();
   return env;
@@ -520,10 +530,62 @@ var DIE_REST=0.80;
 var DIE_ROLL=0.66;
 var STAGE_FOV=24;
 var STAGE_DIST=18;
-var DIE_GEO=new THREE.BoxGeometry(1,1,1);
+var DIE_GEO=null;
+
+function initThreeConsts(){
+  if(FACE_QUATS)return;
+  FACE_QUATS=[
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(0,-Math.PI/2,0)),   // +X face (1)
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(0,Math.PI/2,0)),    // -X face (6)
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI/2,0,0)),    // +Y face (2)
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI/2,0,0)),   // -Y face (5)
+    new THREE.Quaternion(),                                                  // +Z face (3)
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI,0,0))       // -Z face (4)
+  ];
+  DIE_GEO=new THREE.BoxGeometry(1,1,1);
+}
+
+
+// ── Post-processing ──────────────────────────────────────────────────────────
+// pmndrs postprocessing rather than three's EffectComposer: one fullscreen
+// pass for all three effects, and mipmap bloom at half resolution.
+var BLOOM_SCALE=0.5;
+function buildComposer(){
+  var st=stage;if(!st||!window.POSTPROCESSING)return;
+  var PP=POSTPROCESSING;
+  var composer=new PP.EffectComposer(st.renderer,{
+    frameBufferType:THREE.HalfFloatType,
+    multisampling:0
+  });
+  composer.addPass(new PP.RenderPass(st.scene,st.camera));
+  var bloom=new PP.BloomEffect({
+    intensity:1.15,
+    luminanceThreshold:0.78,   // only the hot highlights, not the whole die face
+    luminanceSmoothing:0.3,
+    mipmapBlur:true,
+    radius:0.62,
+    resolutionScale:BLOOM_SCALE
+  });
+  var ca=new PP.ChromaticAberrationEffect({
+    offset:new THREE.Vector2(0,0),
+    radialModulation:true,
+    modulationOffset:0.25
+  });
+  var vignette=new PP.VignetteEffect({offset:0.40,darkness:0.26});
+  composer.addPass(new PP.EffectPass(st.camera,bloom,ca,vignette));
+  st.composer=composer;st.bloom=bloom;st.ca=ca;st.vignette=vignette;
+  if(st.cw&&st.ch)composer.setSize(st.cw,st.ch);
+}
+
+// Kick a chromatic-aberration pulse — the Yahtzee equivalent of a Tetris.
+function pulseAberration(strength){
+  var st=stage;if(!st)return;
+  st.caPeak=strength;st.caPulse=1;st.dirty=true;
+}
 
 function initDiceStage(){
   if(stage)return stage;
+  initThreeConsts();
   var panel=document.getElementById('dice-panel');
   if(!panel)return null;
 
@@ -534,7 +596,7 @@ function initDiceStage(){
   var renderer=new THREE.WebGLRenderer({canvas:canvas,antialias:true,alpha:true});
   renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
   renderer.setClearColor(0x000000,0);
-  renderer.outputEncoding=THREE.sRGBEncoding;
+  renderer.outputColorSpace=THREE.SRGBColorSpace;
   renderer.toneMapping=THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure=0.98;
   renderer.shadowMap.enabled=true;
@@ -551,15 +613,15 @@ function initDiceStage(){
   var env=makeStudioEnv(renderer);
   scene.environment=env;
 
-  var amb=new THREE.AmbientLight(0xffffff,0.34);scene.add(amb);
-  var key=new THREE.DirectionalLight(0xfff0dd,0.92);
+  var amb=new THREE.AmbientLight(0xffffff,1.05);scene.add(amb);
+  var key=new THREE.DirectionalLight(0xfff0dd,2.85);
   key.position.set(3.2,5.2,9.5);
   key.castShadow=true;
   key.shadow.mapSize.set(512,512);
   key.shadow.camera.near=1;key.shadow.camera.far=48;
   key.shadow.bias=-0.0016;key.shadow.radius=4;
   scene.add(key);
-  var fill=new THREE.DirectionalLight(0x9fc0ff,0.26);
+  var fill=new THREE.DirectionalLight(0x9fc0ff,0.80);
   fill.position.set(-5,-2,4);scene.add(fill);
 
   // Shadow-only plane: leaves the panel's CSS background alone and just
@@ -569,7 +631,9 @@ function initDiceStage(){
 
   stage={renderer:renderer,scene:scene,camera:camera,canvas:canvas,panel:panel,
          env:env,amb:amb,key:key,fill:fill,catcher:catcher,
-         dies:{},wpp:1,needLayout:true,lastLayout:0,reordering:false,raf:null};
+         dies:{},wpp:1,needLayout:true,lastLayout:0,reordering:false,raf:null,
+         composer:null,bloom:null,vignette:null,ca:null,caPulse:0,caPeak:0};
+  buildComposer();
 
   resizeStage();
   applyFx();
@@ -655,6 +719,13 @@ function stageLoop(){
   st.raf=requestAnimationFrame(stageLoop);
   syncDieLayout(false);
   var moving=false;
+  // Animation is driven by elapsed time, not by frame count, so a roll takes
+  // the same wall-clock time whether the device is running at 60fps or 20.
+  var nowMs=(window.performance&&performance.now)?performance.now():Date.now();
+  var dt=Math.min(100,nowMs-(st.lastFrame||nowMs-16.7));
+  st.lastFrame=nowMs;
+  var step=dt/16.667;                       // frames-equivalent at 60fps
+  var ease=function(perFrame){return 1-Math.pow(1-perFrame,step);};
   var t=Date.now()*0.0008;
   for(var i=0;i<5;i++){
     var mesh=st.dies[i];
@@ -662,13 +733,13 @@ function stageLoop(){
     var anim=threeAnimating[i]||{active:false};
     if(anim.active){
       // Roll: tumble for a beat, then settle onto the target face
-      anim.t=(anim.t||0)+0.08;
+      anim.t=(anim.t||0)+0.08*step;
       if(anim.t<1){
-        mesh.rotation.x+=0.18+anim.t*0.1;
-        mesh.rotation.y+=0.22+anim.t*0.08;
-        mesh.rotation.z+=0.1;
+        mesh.rotation.x+=(0.18+anim.t*0.1)*step;
+        mesh.rotation.y+=(0.22+anim.t*0.08)*step;
+        mesh.rotation.z+=0.1*step;
       } else {
-        mesh.quaternion.slerp(anim.targetQuat,0.15);
+        mesh.quaternion.slerp(anim.targetQuat,ease(0.15));
         if(Math.abs(mesh.quaternion.dot(anim.targetQuat))>0.9995){
           mesh.quaternion.copy(anim.targetQuat);
           anim.active=false;
@@ -677,14 +748,14 @@ function stageLoop(){
       }
     } else {
       // Idle: gentle bob
-      mesh.rotation.x+=Math.sin(t+i)*0.001;
-      mesh.rotation.y+=Math.cos(t*0.7+i)*0.001;
+      mesh.rotation.x+=Math.sin(t+i)*0.001*step;
+      mesh.rotation.y+=Math.cos(t*0.7+i)*0.001*step;
     }
     var box=mesh.userData.box;
     if(box!==undefined){
       var want=box*(anim.active?DIE_ROLL:DIE_REST);
       var cur=mesh.scale.x;
-      if(Math.abs(cur-want)>want*0.004){mesh.scale.setScalar(cur+(want-cur)*0.18);moving=true;}
+      if(Math.abs(cur-want)>want*0.004){mesh.scale.setScalar(cur+(want-cur)*ease(0.18));moving=true;}
       else mesh.scale.setScalar(want);
     }
     if(anim.active)moving=true;
@@ -693,13 +764,23 @@ function stageLoop(){
   // bob keeps going without paying for a full-rate redraw of a physical
   // material plus a shadow pass.
   st.frame=(st.frame||0)+1;
-  var busy=moving||st.dirty||st.reordering;
+  var busy=moving||st.dirty||st.reordering||st.caPulse>0;
   if(!busy&&st.frame%6!==0)return;
   // Discrete changes (hold, new faces, relayout) refresh the shadow map at
   // once; continuous motion only needs it a few times a second.
   if(st.dirty||(busy&&st.frame%3===0))st.renderer.shadowMap.needsUpdate=true;
   st.dirty=false;
-  st.renderer.render(st.scene,st.camera);
+  // Decay the aberration pulse
+  if(st.caPulse>0){
+    st.caPulse=Math.max(0,st.caPulse-0.045*step);
+    if(st.ca){
+      var o=st.caPeak*st.caPulse*st.caPulse;   // ease out quickly
+      st.ca.offset.set(o,o*0.6);
+    }
+    st.dirty=true;
+  }
+  if(fxOn('fxPost')&&st.composer)st.composer.render();
+  else st.renderer.render(st.scene,st.camera);
 }
 
 // The canvas only needs to cover the dice column, not the whole panel — the
@@ -742,6 +823,7 @@ function layoutStageCanvas(){
   var sc=st.key.shadow.camera;
   sc.left=-halfW*2;sc.right=halfW*2;sc.top=halfH*1.5;sc.bottom=-halfH*1.5;
   sc.updateProjectionMatrix();
+  if(st.composer)st.composer.setSize(pw,ch);
   st.dirty=true;
 }
 
@@ -760,10 +842,10 @@ function applyFx(){
   st.scene.environment=on?st.env:null;
   st.renderer.toneMapping=on?THREE.ACESFilmicToneMapping:THREE.NoToneMapping;
   st.renderer.shadowMap.enabled=on;
-  st.amb.intensity=on?0.34:0.72;
-  st.key.intensity=on?0.92:0.60;
+  st.amb.intensity=on?1.05:2.25;
+  st.key.intensity=on?2.85:1.90;
   st.key.castShadow=on;
-  st.fill.intensity=on?0.26:0.22;
+  st.fill.intensity=on?0.80:0.70;
   st.catcher.visible=on;
   st.dirty=true;
   for(var i=0;i<5;i++){
@@ -1540,6 +1622,9 @@ function celebrateYahtzee(count){
     });
   }
 
+  // Chromatic-aberration kick, bigger for double/triple
+  if(typeof pulseAberration==='function')pulseAberration(0.0022+tier*0.0016);
+
   if(tier>=3){
     var app=document.querySelector('.app');
     app.classList.remove('yz-shake');void app.offsetWidth;app.classList.add('yz-shake');
@@ -1629,6 +1714,7 @@ var VERSION_LOG=[
   {v:'3.2', note:'New settings slider: Dice position shifts the dice + roll button stack up or down within the dice panel, independent of dice size and spacing.'},
   {v:'3.3', note:'Home Screen icons added — riveted steel die icon + manifest so the app looks right when installed. Yahtzee celebration restyled to match: confetti replaced with welding sparks and metal shards, banner is a riveted, hazard-striped steel plate that stamps in instead of bouncing, plus a warning-beacon flash on double/triple Yahtzee.'},
   {v:'4.0', note:'Rendering rebuilt on a single WebGL renderer: all five dice now share one scene, camera and animation loop (was five renderers and five loops), with the dice DOM kept as the layout and tap layer so sliders, reordering and swap-sides drive the 3D dice directly. Lighting and materials upgraded — PMREM studio environment, ACES filmic tone mapping, physical clearcoat dice with the pips as drilled recesses, emissive held dice, and soft contact shadows. Face textures are now cached instead of rebuilt on every roll. New Effects toggle in settings to compare the lighting on/off.'},
+  {v:'4.1', note:'Phase 2 — post-processing. three.js upgraded from r128 to 0.185.1 (pinned ES module build via importmap; the game script stays a classic script so inline handlers and globals are unchanged), with colour management and light intensities migrated to the modern API. Added pmndrs postprocessing: mipmap bloom at half resolution, a faint vignette, and a chromatic-aberration pulse that fires on a Yahtzee and scales with double/triple. Dice animation is now driven by elapsed time instead of frame count, so a roll takes the same wall-clock time regardless of frame rate. New Bloom & post toggle in settings.'},
 ];
 
 function toggleVerLog(){
@@ -2121,8 +2207,8 @@ function render(){renderDice();fitDice();renderScorecard();document.getElementBy
 var SETTINGS_KEY='yahtzee_settings_v2';
 // fx* keys are the effect-group toggles (1 = on). Each new effect phase adds
 // one here and one button in the settings panel so it can be A/B'd.
-var SETTINGS_DEFAULTS={rowHeight:32,headerSize:20,diceScale:100,diceGap:0,diceVshift:0,fxLighting:1};
-var FX_KEYS=['fxLighting'];
+var SETTINGS_DEFAULTS={rowHeight:32,headerSize:20,diceScale:100,diceGap:0,diceVshift:0,fxLighting:1,fxPost:1};
+var FX_KEYS=['fxLighting','fxPost'];
 function fxOn(key){return !!(currentSettings&&currentSettings[key]);}
 var currentSettings={};
 
@@ -2166,6 +2252,7 @@ function toggleFx(key){
   saveSettings(currentSettings);
   syncFxToggles();
   applyFx();
+  if(stage)stage.dirty=true;
 }
 function applySettings(){
   // Read from sliders
@@ -2216,12 +2303,20 @@ function closeSettings(){
 // Init settings on load
 currentSettings=loadSettings();
 
-initConstants();
-newGame();
-// Show current version number
-(function(){var v=document.getElementById('app-ver');if(v&&VERSION_LOG&&VERSION_LOG.length)v.textContent='v'+VERSION_LOG[VERSION_LOG.length-1].v;})();
-// Apply saved settings after first render
-setTimeout(function(){syncSliders();applySettings()},50);
+// Startup waits for the module shim above to publish THREE. Whichever of the
+// two runs last kicks this off.
+window.__boot=function(){
+  if(window.__booted)return;
+  window.__booted=true;
+  initConstants();
+  newGame();
+  // Show current version number
+  var v=document.getElementById('app-ver');
+  if(v&&VERSION_LOG&&VERSION_LOG.length)v.textContent='v'+VERSION_LOG[VERSION_LOG.length-1].v;
+  // Apply saved settings after first render
+  setTimeout(function(){syncSliders();applySettings()},50);
+};
+if(window.__threeReady)window.__boot();
 </script>
 </body>
 </html>
