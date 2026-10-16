@@ -58,13 +58,17 @@ body{font-family:-apple-system,'SF Pro Display','Helvetica Neue',sans-serif;back
   position:relative;
 }
 .die-slot{width:var(--slot);height:var(--slot);position:relative;flex-shrink:0;display:flex;align-items:center;justify-content:center;margin:var(--slot-squeeze,0) 0;transform:translateY(var(--dice-vshift,0px))}
-.die-wrap{width:var(--die);height:var(--die);cursor:pointer;position:relative;user-select:none;-webkit-user-select:none;overflow:hidden;border-radius:calc(var(--die) * .085)}
+/* The wrapper no longer holds a canvas — it is the invisible layout box and
+   tap target that the shared WebGL stage positions each die from. */
+.die-wrap{width:var(--die);height:var(--die);cursor:pointer;position:relative;user-select:none;-webkit-user-select:none;border-radius:calc(var(--die) * .085)}
 .die-wrap:active{transform:scale(.86)}
 .die-wrap.rolling{opacity:1}/* Three.js handles roll animation */
-.held-ring{position:absolute;inset:-2px;border-radius:calc(var(--die) * .085);border:2px solid #40916c;pointer-events:none}
+.held-ring{position:absolute;inset:-2px;border-radius:calc(var(--die) * .085);border:2px solid #40916c;pointer-events:none;z-index:2}
+/* One canvas for all five dice, behind the controls and the held rings */
+.dice-stage{position:absolute;left:0;top:0;pointer-events:none;z-index:1}
 .btn-swap{position:absolute;top:5px;left:5px;right:5px;width:calc(100% - 10px);background:rgba(255,255,255,.1);color:var(--text);border:none;border-radius:8px;padding:7px 0;font-size:22px;cursor:pointer;-webkit-appearance:none;z-index:2}
 .btn-swap:active{background:rgba(255,255,255,.18)}
-.dice-controls{margin-top:0;width:100%;display:flex;flex-direction:column;align-items:center;gap:2px;transform:translateY(var(--dice-vshift,0px))}
+.dice-controls{margin-top:0;width:100%;display:flex;flex-direction:column;align-items:center;gap:2px;transform:translateY(var(--dice-vshift,0px));position:relative;z-index:2}
 .pips{display:flex;gap:3px}
 .pip{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.14);transition:background .2s}
 .pip.on{background:var(--accent)}
@@ -157,6 +161,15 @@ body{font-family:-apple-system,'SF Pro Display','Helvetica Neue',sans-serif;back
 .setting-label span:last-child{color:var(--text);font-weight:600;font-size:12px;min-width:30px;text-align:right}
 input[type=range].setting-slider{width:100%;height:4px;-webkit-appearance:none;appearance:none;background:rgba(255,255,255,.15);border-radius:2px;outline:none}
 input[type=range].setting-slider::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;background:var(--accent);cursor:pointer}
+/* Effect toggles — one per group so each can be compared on/off */
+.fx-toggles{display:flex;flex-wrap:wrap;gap:6px}
+.fx-tgl{flex:1 1 auto;background:rgba(255,255,255,.06);color:rgba(255,255,255,.45);
+  border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:7px 10px;
+  font-size:11px;font-weight:600;cursor:pointer;-webkit-appearance:none;
+  display:flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap}
+.fx-tgl::before{content:'';width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,.18);flex-shrink:0}
+.fx-tgl.on{background:rgba(245,166,35,.14);border-color:rgba(245,166,35,.4);color:#f5a623}
+.fx-tgl.on::before{background:#f5a623;box-shadow:0 0 6px rgba(245,166,35,.9)}
 .settings-reset{margin-top:6px;width:100%;background:rgba(255,255,255,.06);color:rgba(255,255,255,.4);border:none;border-radius:8px;padding:8px;font-size:12px;cursor:pointer;-webkit-appearance:none}
 .settings-reset:active{background:rgba(255,255,255,.12)}
 .ov-card{background:var(--surface);border-radius:18px;padding:24px 20px;text-align:center;width:100%;max-width:300px}
@@ -307,6 +320,12 @@ input[type=range].setting-slider::-webkit-slider-thumb{-webkit-appearance:none;w
       <div class="setting-label"><span>Dice position</span><span id="lbl-dice-vshift">0</span>px</div>
       <input type="range" class="setting-slider" id="sl-dice-vshift" min="-80" max="80" step="1" oninput="applySettings()">
     </div>
+    <div class="setting-row">
+      <div class="setting-label"><span>Effects</span><span></span></div>
+      <div class="fx-toggles">
+        <button class="fx-tgl" id="tg-fxLighting" onclick="toggleFx('fxLighting')">Lighting &amp; materials</button>
+      </div>
+    </div>
     <button class="settings-reset" onclick="swapSides()" style="margin-bottom:6px;color:rgba(255,255,255,.6);">⇄ Swap dice / scores sides</button>
     <button class="settings-reset" onclick="resetSettings()">Reset to defaults</button>
   </div>
@@ -390,13 +409,17 @@ function hasSeq(d,n){
 function rnd(){return Math.ceil(Math.random()*6)}
 function clamp01(x){return x<0?0:x>1?1:x}
 
-// ── Three.js Dice System ──────────────────────────────────────
-var threeRenderers={}; // keyed by origIdx
-var threeScenes={};
-var threeCameras={};
-var threeCubes={};
-var threeAnimating={}; // origIdx -> {active,targetQuat,onDone}
-var threeRAFs={};
+// ── Three.js Dice System (one renderer, DOM-synced) ───────────
+// All five dice are drawn by a single WebGLRenderer into one canvas that
+// overlays the dice panel. The .die-slot/.die-wrap DOM stays exactly where it
+// was and acts as the layout + hit-target layer: every frame each die mesh is
+// positioned and sized from its wrapper's bounding box. That means CSS sizing,
+// the dice-size/spacing/position sliders, the FLIP reorder animation,
+// swap-sides and the :active tap-squash all keep driving the 3D dice for free,
+// and we go from 5 WebGL contexts + 5 RAF loops down to 1 of each.
+var stage=null;          // the shared renderer/scene/camera + die meshes
+var threeCubes={};       // origIdx -> die mesh
+var threeAnimating={};   // origIdx -> {active,t,targetQuat,onDone}
 
 // Pip positions on each face of a unit cube
 // Face order: +X=1, -X=6, +Y=2, -Y=5, +Z=3, -Z=4
@@ -418,15 +441,23 @@ var FACE_QUATS=[
   new THREE.Quaternion(),                                                    // +Z face (3)
   new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI,0,0)),        // -Z face (4)
 ];
-// Map die value to face quaternion index
+// Map die value to face quaternion index, and back
 var VALUE_TO_FACE={1:0,2:2,3:4,4:5,5:3,6:1};
+var FACE_TO_VALUE={};
+for(var _v=1;_v<=6;_v++)FACE_TO_VALUE[VALUE_TO_FACE[_v]]=_v;
 
-function makePipTexture(value,isHeld){
+// Face textures only depend on (value, held), so there are just 14 of them.
+// Cache instead of rebuilding six canvases per die on every roll and hold.
+var PIP_TEX={};
+function pipTexture(value,isHeld){
+  var key=value+'_'+(isHeld?1:0);
+  if(PIP_TEX[key])return PIP_TEX[key];
   var size=256;
   var can=document.createElement('canvas');can.width=size;can.height=size;
   var ctx=can.getContext('2d');
-  // Face background
   var r=size*0.12;
+  var isEmpty=!(value>0);
+  if(isEmpty)ctx.globalAlpha=0.25;
   ctx.fillStyle=isHeld?'#183d2c':'#f0e8d0';
   // Rounded rect
   ctx.beginPath();
@@ -435,10 +466,10 @@ function makePipTexture(value,isHeld){
   ctx.lineTo(r,size);ctx.quadraticCurveTo(0,size,0,size-r);
   ctx.lineTo(0,r);ctx.quadraticCurveTo(0,0,r,0);ctx.closePath();
   ctx.fill();
-  // Border
-  ctx.strokeStyle=isHeld?'#40916c':'#c0a87a';ctx.lineWidth=8;ctx.stroke();
-  // Pips
-  if(value>0){
+  if(!isEmpty){
+    // Border
+    ctx.strokeStyle=isHeld?'#40916c':'#c0a87a';ctx.lineWidth=8;ctx.stroke();
+    // Pips
     var pipColor=isHeld?'#74c69d':'#1a1a2e';
     var layout=PIP_FACES[value]?PIP_FACES[value].pips:[];
     var pr=size*0.085;
@@ -449,137 +480,308 @@ function makePipTexture(value,isHeld){
     });
   }
   var tex=new THREE.CanvasTexture(can);
+  tex.encoding=THREE.sRGBEncoding;
+  tex.anisotropy=4;
+  // The same texture doubles as the bump map: three samples bumpMap as raw
+  // height data regardless of .encoding, so the dark pips read as drilled
+  // recesses rather than painted dots.
+  PIP_TEX[key]=tex;
   return tex;
 }
 
-function makeEmptyTexture(isHeld){
-  var size=256;
-  var can=document.createElement('canvas');can.width=size;can.height=size;
-  var ctx=can.getContext('2d');
-  var r=size*0.12;
-  ctx.globalAlpha=0.25;
-  ctx.fillStyle=isHeld?'#183d2c':'#f0e8d0';
-  ctx.beginPath();
-  ctx.moveTo(r,0);ctx.lineTo(size-r,0);ctx.quadraticCurveTo(size,0,size,r);
-  ctx.lineTo(size,size-r);ctx.quadraticCurveTo(size,size,size-r,size);
-  ctx.lineTo(r,size);ctx.quadraticCurveTo(0,size,0,size-r);
-  ctx.lineTo(0,r);ctx.quadraticCurveTo(0,0,r,0);ctx.closePath();
-  ctx.fill();
-  var tex=new THREE.CanvasTexture(can);
-  return tex;
+// A small painted environment — dark floor, lit ceiling, two overhead strip
+// lights. Run through PMREM it becomes the image the clearcoat reflects, which
+// is what makes the dice read as solid objects instead of flat boxes.
+function makeStudioEnv(renderer){
+  var c=document.createElement('canvas');c.width=256;c.height=128;
+  var x=c.getContext('2d');
+  var g=x.createLinearGradient(0,0,0,128);
+  g.addColorStop(0,'#b9c2d2');g.addColorStop(0.46,'#5c636e');
+  g.addColorStop(0.54,'#262b35');g.addColorStop(1,'#10131a');
+  x.fillStyle=g;x.fillRect(0,0,256,128);
+  [[28,14,96,11],[150,9,74,9]].forEach(function(s){
+    var lg=x.createLinearGradient(0,s[1],0,s[1]+s[3]);
+    lg.addColorStop(0,'rgba(255,246,228,1)');
+    lg.addColorStop(1,'rgba(255,246,228,0)');
+    x.fillStyle=lg;x.fillRect(s[0],s[1],s[2],s[3]);
+  });
+  var tex=new THREE.CanvasTexture(c);
+  tex.mapping=THREE.EquirectangularReflectionMapping;
+  var pm=new THREE.PMREMGenerator(renderer);
+  pm.compileEquirectangularShader();
+  var env=pm.fromEquirectangular(tex).texture;
+  pm.dispose();tex.dispose();
+  return env;
 }
 
-// How far back the die camera sits. Lower = cube fills more of its canvas.
-// 1.73 is the cube's diagonal, so this is about as close as it can get without
-// the corners clipping mid-tumble.
-var DIE_CAM_Z=2.15;
-// At rest the die is scaled up to fill its box; while rolling it shrinks back to 1.0
-// so the spinning corners still have clearance. This is what closes the visual gap.
-var DIE_IDLE_SCALE=1.12;
+// Cube edge as a fraction of its wrapper box. Dice shrink slightly while
+// tumbling so the spinning corners stay clear of their neighbours.
+var DIE_REST=0.80;
+var DIE_ROLL=0.66;
+var STAGE_FOV=24;
+var STAGE_DIST=18;
+var DIE_GEO=new THREE.BoxGeometry(1,1,1);
 
-function createDieScene(container,origIdx,value,isHeld,isEmpty){
-  // Cleanup existing
-  if(threeRAFs[origIdx])cancelAnimationFrame(threeRAFs[origIdx]);
-  if(threeRenderers[origIdx]){
-    threeRenderers[origIdx].dispose();
-    var oldCanvas=container.querySelector('canvas');
-    if(oldCanvas)oldCanvas.remove();
-  }
+function initDiceStage(){
+  if(stage)return stage;
+  var panel=document.getElementById('dice-panel');
+  if(!panel)return null;
 
-  var W=container.clientWidth||72,H=container.clientHeight||72;
-  var renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
-  renderer.setSize(W,H);
+  var canvas=document.createElement('canvas');
+  canvas.className='dice-stage';
+  panel.appendChild(canvas);
+
+  var renderer=new THREE.WebGLRenderer({canvas:canvas,antialias:true,alpha:true});
   renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
   renderer.setClearColor(0x000000,0);
-  renderer.domElement.style.cssText='position:absolute;inset:0;width:100%;height:100%;border-radius:inherit;';
-  container.style.position='relative';
-  container.appendChild(renderer.domElement);
+  renderer.outputEncoding=THREE.sRGBEncoding;
+  renderer.toneMapping=THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure=0.98;
+  renderer.shadowMap.enabled=true;
+  renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+  // The dice are stationary most of the time, so the shadow map is refreshed
+  // explicitly when something actually moves instead of every frame.
+  renderer.shadowMap.autoUpdate=false;
+  renderer.shadowMap.needsUpdate=true;
 
   var scene=new THREE.Scene();
-  var camera=new THREE.PerspectiveCamera(45,W/H,0.1,100);
-  camera.position.z=DIE_CAM_Z;
+  var camera=new THREE.PerspectiveCamera(STAGE_FOV,1,0.1,200);
+  camera.position.set(0,0,STAGE_DIST);
 
-  // Lighting
-  var amb=new THREE.AmbientLight(0xffffff,0.7);scene.add(amb);
-  var dir=new THREE.DirectionalLight(0xffffff,0.9);dir.position.set(1,2,3);scene.add(dir);
-  var dir2=new THREE.DirectionalLight(isHeld?0x40916c:0xffeedd,0.4);dir2.position.set(-2,-1,1);scene.add(dir2);
+  var env=makeStudioEnv(renderer);
+  scene.environment=env;
 
-  // Build cube with one pip texture per face
+  var amb=new THREE.AmbientLight(0xffffff,0.34);scene.add(amb);
+  var key=new THREE.DirectionalLight(0xfff0dd,0.92);
+  key.position.set(3.2,5.2,9.5);
+  key.castShadow=true;
+  key.shadow.mapSize.set(512,512);
+  key.shadow.camera.near=1;key.shadow.camera.far=48;
+  key.shadow.bias=-0.0016;key.shadow.radius=4;
+  scene.add(key);
+  var fill=new THREE.DirectionalLight(0x9fc0ff,0.26);
+  fill.position.set(-5,-2,4);scene.add(fill);
+
+  // Shadow-only plane: leaves the panel's CSS background alone and just
+  // darkens where the dice shade it.
+  var catcher=new THREE.Mesh(new THREE.PlaneGeometry(1,1),new THREE.ShadowMaterial({opacity:0.20}));
+  catcher.position.z=-0.6;catcher.receiveShadow=true;scene.add(catcher);
+
+  stage={renderer:renderer,scene:scene,camera:camera,canvas:canvas,panel:panel,
+         env:env,amb:amb,key:key,fill:fill,catcher:catcher,
+         dies:{},wpp:1,needLayout:true,lastLayout:0,reordering:false,raf:null};
+
+  resizeStage();
+  applyFx();
+  stageLoop();
+  return stage;
+}
+
+function ensureDie(i){
+  var st=stage;if(!st)return null;
+  if(st.dies[i])return st.dies[i];
   var mats=[];
   for(var f=0;f<6;f++){
-    // Which die value goes on this face?
-    var faceVal=null;
-    for(var v2=1;v2<=6;v2++){if(VALUE_TO_FACE[v2]===f){faceVal=v2;break;}}
-    var tex=isEmpty?makeEmptyTexture(isHeld):makePipTexture(faceVal,isHeld);
-    mats.push(new THREE.MeshLambertMaterial({map:tex,transparent:isEmpty}));
+    mats.push(new THREE.MeshPhysicalMaterial({
+      color:0xece2c8,roughness:0.38,metalness:0.0,
+      clearcoat:0.7,clearcoatRoughness:0.18,
+      envMapIntensity:0.90,bumpScale:0.022
+    }));
   }
+  var mesh=new THREE.Mesh(DIE_GEO,mats);
+  mesh.castShadow=true;
+  mesh.userData.fresh=true;
+  st.scene.add(mesh);
+  st.dies[i]=mesh;
+  threeCubes[i]=mesh;
+  if(!threeAnimating[i])threeAnimating[i]={active:false};
+  return mesh;
+}
 
-  var geo=new THREE.BoxGeometry(1,1,1);
-  var cube=new THREE.Mesh(geo,mats);
-  cube.scale.setScalar(DIE_IDLE_SCALE);
-  scene.add(cube);
-
-  // Set initial rotation to show correct face
-  if(!isEmpty&&value>0){
-    var targetQ=FACE_QUATS[VALUE_TO_FACE[value]].clone();
-    cube.quaternion.copy(targetQ);
+// Point the six faces at the cached textures for this value/held combination.
+function setDieFaces(i,value,isHeld){
+  var mesh=ensureDie(i);if(!mesh)return;
+  var isEmpty=!(value>0);
+  var lighting=fxOn('fxLighting');
+  for(var f=0;f<6;f++){
+    var tex=pipTexture(isEmpty?0:FACE_TO_VALUE[f],isHeld);
+    var m=mesh.material[f];
+    m.map=tex;m.bumpMap=tex;
+    m.transparent=isEmpty;
+    m.emissive.setHex(isHeld?0x0c2e1c:0x000000);
+    m.emissiveIntensity=isHeld?(lighting?0.32:0.22):0;
+    m.needsUpdate=true;
   }
+  if(stage)stage.dirty=true;
+  if(mesh.userData.fresh&&!isEmpty){
+    mesh.quaternion.copy(FACE_QUATS[VALUE_TO_FACE[value]]);
+    mesh.userData.fresh=false;
+  }
+}
 
-  threeRenderers[origIdx]=renderer;
-  threeScenes[origIdx]=scene;
-  threeCameras[origIdx]=camera;
-  threeCubes[origIdx]=cube;
-  threeAnimating[origIdx]={active:false};
+// Place each die mesh over its wrapper box. Reading five rects per frame is
+// cheap, but only worth doing continuously while something is actually moving.
+function syncDieLayout(force){
+  var st=stage;if(!st)return;
+  var active=st.reordering||rolling;
+  if(!active){for(var a=0;a<5;a++)if(threeAnimating[a]&&threeAnimating[a].active){active=true;break;}}
+  var now=Date.now();
+  if(!force&&!st.needLayout&&!active&&now-st.lastLayout<200)return;
+  if(force||st.needLayout)layoutStageCanvas();
+  st.lastLayout=now;st.needLayout=false;
+  var pr=st.canvas.getBoundingClientRect();
+  if(!pr.width||!pr.height)return;
+  for(var i=0;i<5;i++){
+    var w=diceWraps[i],mesh=st.dies[i];
+    if(!mesh)continue;
+    if(!w||!w.isConnected){mesh.visible=false;continue;}
+    var r=w.getBoundingClientRect();
+    if(!r.width||!r.height){mesh.visible=false;continue;}
+    mesh.visible=true;
+    var cx=r.left+r.width/2-pr.left;
+    var cy=r.top+r.height/2-pr.top;
+    var nx=(cx-pr.width/2)*st.wpp,ny=(pr.height/2-cy)*st.wpp;
+    var box=r.width*st.wpp;
+    if(Math.abs(nx-mesh.position.x)>1e-4||Math.abs(ny-mesh.position.y)>1e-4||
+       Math.abs(box-(mesh.userData.box||0))>1e-4)st.dirty=true;
+    mesh.position.x=nx;mesh.position.y=ny;
+    if(mesh.userData.box===undefined)mesh.scale.setScalar(box*DIE_REST);
+    mesh.userData.box=box;
+  }
+}
 
-  // Animate loop
-  function loop(){
-    threeRAFs[origIdx]=requestAnimationFrame(loop);
-    var anim=threeAnimating[origIdx];
+function stageLoop(){
+  var st=stage;if(!st)return;
+  st.raf=requestAnimationFrame(stageLoop);
+  syncDieLayout(false);
+  var moving=false;
+  var t=Date.now()*0.0008;
+  for(var i=0;i<5;i++){
+    var mesh=st.dies[i];
+    if(!mesh||!mesh.visible)continue;
+    var anim=threeAnimating[i]||{active:false};
     if(anim.active){
-      // Roll: spin fast for duration, then snap to target
+      // Roll: tumble for a beat, then settle onto the target face
       anim.t=(anim.t||0)+0.08;
       if(anim.t<1){
-        // Random tumble
-        cube.rotation.x+=0.18+anim.t*0.1;
-        cube.rotation.y+=0.22+anim.t*0.08;
-        cube.rotation.z+=0.1;
+        mesh.rotation.x+=0.18+anim.t*0.1;
+        mesh.rotation.y+=0.22+anim.t*0.08;
+        mesh.rotation.z+=0.1;
       } else {
-        // Snap to target quaternion
-        cube.quaternion.slerp(anim.targetQuat,0.15);
-        var diff=cube.quaternion.dot(anim.targetQuat);
-        if(Math.abs(diff)>0.9995){
-          cube.quaternion.copy(anim.targetQuat);
+        mesh.quaternion.slerp(anim.targetQuat,0.15);
+        if(Math.abs(mesh.quaternion.dot(anim.targetQuat))>0.9995){
+          mesh.quaternion.copy(anim.targetQuat);
           anim.active=false;
           if(anim.onDone)anim.onDone();
         }
       }
     } else {
       // Idle: gentle bob
-      var t=Date.now()*0.0008;
-      cube.rotation.x+=Math.sin(t+origIdx)*0.001;
-      cube.rotation.y+=Math.cos(t*0.7+origIdx)*0.001;
+      mesh.rotation.x+=Math.sin(t+i)*0.001;
+      mesh.rotation.y+=Math.cos(t*0.7+i)*0.001;
     }
-    // Ease between rolling size and resting size
-    var wantScale=anim.active?1:DIE_IDLE_SCALE;
-    if(Math.abs(cube.scale.x-wantScale)>0.002)cube.scale.setScalar(cube.scale.x+(wantScale-cube.scale.x)*0.18);
-    else cube.scale.setScalar(wantScale);
-    renderer.render(scene,camera);
+    var box=mesh.userData.box;
+    if(box!==undefined){
+      var want=box*(anim.active?DIE_ROLL:DIE_REST);
+      var cur=mesh.scale.x;
+      if(Math.abs(cur-want)>want*0.004){mesh.scale.setScalar(cur+(want-cur)*0.18);moving=true;}
+      else mesh.scale.setScalar(want);
+    }
+    if(anim.active)moving=true;
   }
-  loop();
+  // Nothing moving and nothing changed? Draw only on a slow tick so the idle
+  // bob keeps going without paying for a full-rate redraw of a physical
+  // material plus a shadow pass.
+  st.frame=(st.frame||0)+1;
+  var busy=moving||st.dirty||st.reordering;
+  if(!busy&&st.frame%6!==0)return;
+  // Discrete changes (hold, new faces, relayout) refresh the shadow map at
+  // once; continuous motion only needs it a few times a second.
+  if(st.dirty||(busy&&st.frame%3===0))st.renderer.shadowMap.needsUpdate=true;
+  st.dirty=false;
+  st.renderer.render(st.scene,st.camera);
 }
 
-// Keep the WebGL buffers in step whenever the die boxes change size.
-function resizeDiceRenderers(){
+// The canvas only needs to cover the dice column, not the whole panel — the
+// empty space below the dice was costing roughly half the fill rate. Keep a
+// margin around it so tumbling corners and shadows aren't clipped.
+var STAGE_MARGIN=0.38;   // fraction of one die box
+function layoutStageCanvas(){
+  var st=stage;if(!st)return;
+  var panel=st.panel;
+  var prect=panel.getBoundingClientRect();
+  var pw=panel.clientWidth,ph=panel.clientHeight;
+  if(!pw||!ph)return;
+  var top=Infinity,bottom=-Infinity,any=false;
   for(var i=0;i<5;i++){
-    var r=threeRenderers[i],w=diceWraps[i];
-    if(!r||!w||!w.isConnected)continue;
-    var W=w.clientWidth||72,H=w.clientHeight||72;
-    if(!W||!H)continue;
-    r.setSize(W,H);
-    var cam=threeCameras[i];
-    if(cam){cam.aspect=W/H;cam.updateProjectionMatrix();}
-    r.domElement.style.width='100%';r.domElement.style.height='100%';
+    var w=diceWraps[i];
+    if(!w||!w.isConnected)continue;
+    var r=w.getBoundingClientRect();
+    if(!r.height)continue;
+    any=true;
+    if(r.top<top)top=r.top;
+    if(r.bottom>bottom)bottom=r.bottom;
   }
+  var ctop=0,ch=ph;
+  if(any){
+    var m=(bottom-top)/5*STAGE_MARGIN;
+    ctop=Math.max(0,top-prect.top-m);
+    ch=Math.min(ph-ctop,(bottom-top)+m*2);
+  }
+  if(ch<40)ch=Math.min(ph,40);
+  if(st.cw===pw&&st.ch===ch&&st.ctop===ctop)return;
+  st.cw=pw;st.ch=ch;st.ctop=ctop;
+  st.canvas.style.top=ctop.toFixed(1)+'px';
+  st.renderer.setSize(pw,ch);
+  st.camera.aspect=pw/ch;
+  st.camera.updateProjectionMatrix();
+  var visH=2*STAGE_DIST*Math.tan(STAGE_FOV*Math.PI/360);
+  st.wpp=visH/ch;                    // world units per CSS pixel at z=0
+  var halfW=pw*st.wpp/2,halfH=visH/2;
+  st.catcher.scale.set(halfW*2.6,halfH*2.6,1);
+  var sc=st.key.shadow.camera;
+  sc.left=-halfW*2;sc.right=halfW*2;sc.top=halfH*1.5;sc.bottom=-halfH*1.5;
+  sc.updateProjectionMatrix();
+  st.dirty=true;
+}
+
+function resizeStage(){
+  var st=stage;if(!st)return;
+  st.cw=st.ch=st.ctop=undefined;     // force a re-fit
+  layoutStageCanvas();
+  st.needLayout=true;st.dirty=true;
+}
+
+// Called by the Effects toggle so the new lighting can be A/B'd against the
+// old flat look without reloading.
+function applyFx(){
+  var st=stage;if(!st)return;
+  var on=fxOn('fxLighting');
+  st.scene.environment=on?st.env:null;
+  st.renderer.toneMapping=on?THREE.ACESFilmicToneMapping:THREE.NoToneMapping;
+  st.renderer.shadowMap.enabled=on;
+  st.amb.intensity=on?0.34:0.72;
+  st.key.intensity=on?0.92:0.60;
+  st.key.castShadow=on;
+  st.fill.intensity=on?0.26:0.22;
+  st.catcher.visible=on;
+  st.dirty=true;
+  for(var i=0;i<5;i++){
+    var mesh=st.dies[i];if(!mesh)continue;
+    mesh.castShadow=on;
+    for(var f=0;f<6;f++){
+      var m=mesh.material[f];
+      m.clearcoat=on?0.7:0;
+      m.envMapIntensity=on?0.90:0;
+      m.bumpScale=on?0.022:0;
+      m.roughness=on?0.38:0.85;
+      m.needsUpdate=true;
+    }
+  }
+}
+
+function resizeDiceRenderers(){
+  resizeStage();
 }
 
 // Size the dice to the space that's actually there: measure the row, take off the
@@ -619,36 +821,19 @@ window.addEventListener('resize',fitDice);
 window.addEventListener('orientationchange',function(){setTimeout(fitDice,150)});
 
 function rollDieTo(origIdx,newValue,onDone){
-  var cube=threeCubes[origIdx];
-  if(!cube)return;
-  // Update textures to new value
-  var mats=cube.material;
-  for(var f=0;f<6;f++){
-    var faceVal=null;for(var v2=1;v2<=6;v2++){if(VALUE_TO_FACE[v2]===f){faceVal=v2;break;}}
-    if(mats[f].map){mats[f].map.dispose();}
-    mats[f].map=makePipTexture(faceVal,false);
-    mats[f].needsUpdate=true;
-    mats[f].map.needsUpdate=true;
-  }
+  var mesh=threeCubes[origIdx];
+  if(!mesh)return;
+  // Faces are per-value textures, so this just makes sure the die is showing
+  // the full (unheld) pip set before it tumbles.
+  setDieFaces(origIdx,newValue,false);
   var targetQ=FACE_QUATS[VALUE_TO_FACE[newValue]].clone();
   threeAnimating[origIdx]={active:true,t:0,targetQuat:targetQ,onDone:onDone};
+  if(stage)stage.needLayout=true;
 }
 
 function updateDieHeld(origIdx,isHeld,value){
-  var cube=threeCubes[origIdx];if(!cube)return;
-  var mats=cube.material;
-  for(var f=0;f<6;f++){
-    var faceVal=null;for(var v2=1;v2<=6;v2++){if(VALUE_TO_FACE[v2]===f){faceVal=v2;break;}}
-    if(mats[f].map)mats[f].map.dispose();
-    mats[f].map=value>0?makePipTexture(faceVal,isHeld):makeEmptyTexture(isHeld);
-    mats[f].needsUpdate=true;mats[f].map.needsUpdate=true;
-    mats[f].transparent=(value===0);mats[f].opacity=1;
-  }
-  // Update lighting
-  var scene=threeScenes[origIdx];
-  scene.children.filter(function(ch){return ch.isDirectionalLight&&ch.color.g>0.5}).forEach(function(l){
-    l.color.setHex(isHeld?0x40916c:0xffeedd);
-  });
+  if(!threeCubes[origIdx])return;
+  setDieFaces(origIdx,value,isHeld);
 }
 
 // ── State ────────────────────────────────────────────────────
@@ -1113,7 +1298,10 @@ function animateReorder(order,done){
     moving.push(w3);
   }
 
-  // PLAY: release them into place with a little overshoot
+  // PLAY: release them into place with a little overshoot. The 3D dice track
+  // the wrappers' bounding boxes, so they ride this transition automatically —
+  // the flag just tells the stage to re-read layout every frame while it runs.
+  if(stage)stage.reordering=true;
   requestAnimationFrame(function(){
     requestAnimationFrame(function(){
       moving.forEach(function(w){
@@ -1124,6 +1312,7 @@ function animateReorder(order,done){
   });
   setTimeout(function(){
     moving.forEach(function(w){w.style.transition='';w.style.transform='';w.style.zIndex='';});
+    if(stage){stage.reordering=false;stage.needLayout=true;}
     done();
   },REORDER_MS+40);
 }
@@ -1132,11 +1321,17 @@ function rollDice(){
   if(gameOver){
     dice=[0,0,0,0,0];held=[false,false,false,false,false];slotOrder=null;
     rollCount=0;scores={};rolling=false;yahtzeeBonus=0;yahtzeeCount=0;gameOver=false;
-    // Reset Three.js scenes for new game
+    // Reset the dice for a new game. The meshes and the renderer are kept —
+    // only the per-die animation state and the DOM wrappers are rebuilt.
     for(var ri=0;ri<5;ri++){
-      if(threeRAFs[ri])cancelAnimationFrame(threeRAFs[ri]);
-      delete threeRenderers[ri];delete threeScenes[ri];delete threeCubes[ri];delete diceWraps[ri];
+      threeAnimating[ri]={active:false};
+      if(stage&&stage.dies[ri]){
+        stage.dies[ri].quaternion.identity();
+        stage.dies[ri].userData.fresh=true;
+      }
+      delete diceWraps[ri];
     }
+    if(stage)stage.needLayout=true;
     document.getElementById('overlay').classList.remove('show');
     render();return;
   }
@@ -1433,6 +1628,7 @@ var VERSION_LOG=[
   {v:'3.1', note:'Yahtzee celebration added: confetti burst + banner plays whenever a Yahtzee is scored. Double and triple Yahtzees in the same game get progressively bigger bursts, bolder text and a screen shake on the third.'},
   {v:'3.2', note:'New settings slider: Dice position shifts the dice + roll button stack up or down within the dice panel, independent of dice size and spacing.'},
   {v:'3.3', note:'Home Screen icons added — riveted steel die icon + manifest so the app looks right when installed. Yahtzee celebration restyled to match: confetti replaced with welding sparks and metal shards, banner is a riveted, hazard-striped steel plate that stamps in instead of bouncing, plus a warning-beacon flash on double/triple Yahtzee.'},
+  {v:'4.0', note:'Rendering rebuilt on a single WebGL renderer: all five dice now share one scene, camera and animation loop (was five renderers and five loops), with the dice DOM kept as the layout and tap layer so sliders, reordering and swap-sides drive the 3D dice directly. Lighting and materials upgraded — PMREM studio environment, ACES filmic tone mapping, physical clearcoat dice with the pips as drilled recesses, emissive held dice, and soft contact shadows. Face textures are now cached instead of rebuilt on every roll. New Effects toggle in settings to compare the lighting on/off.'},
 ];
 
 function toggleVerLog(){
@@ -1531,15 +1727,12 @@ function renderDice(){
       var existRing=w.querySelector('.held-ring');
       if(isHeld&&!existRing){var ring=document.createElement('div');ring.className='held-ring';w.appendChild(ring);}
       else if(!isHeld&&existRing)existRing.remove();
-      // Init Three.js if not yet created
-      if(!threeRenderers[origIdx]){
-        sd.appendChild(w);
-        createDieScene(w,origIdx,v,isHeld,isEmpty);
-      } else {
-        sd.appendChild(w);
-        // Just update held state visuals
-        updateDieHeld(origIdx,isHeld,v);
-      }
+      // The wrapper is now just the layout box and tap target — the die itself
+      // is drawn by the shared stage, which follows this element's position.
+      sd.appendChild(w);
+      initDiceStage();
+      setDieFaces(origIdx,v,isHeld);
+      if(stage)stage.needLayout=true;
       w.onclick=(function(oi){return function(){toggleHold(oi)}})(origIdx);
       panel.insertBefore(sd,panel.firstChild);
     })(s);
@@ -1926,7 +2119,11 @@ function render(){renderDice();fitDice();renderScorecard();document.getElementBy
 
 // ── Settings ─────────────────────────────────────────────────
 var SETTINGS_KEY='yahtzee_settings_v2';
-var SETTINGS_DEFAULTS={rowHeight:32,headerSize:20,diceScale:100,diceGap:0,diceVshift:0};
+// fx* keys are the effect-group toggles (1 = on). Each new effect phase adds
+// one here and one button in the settings panel so it can be A/B'd.
+var SETTINGS_DEFAULTS={rowHeight:32,headerSize:20,diceScale:100,diceGap:0,diceVshift:0,fxLighting:1};
+var FX_KEYS=['fxLighting'];
+function fxOn(key){return !!(currentSettings&&currentSettings[key]);}
 var currentSettings={};
 
 function loadSettings(){
@@ -1956,6 +2153,19 @@ function syncSliders(){
   document.getElementById('lbl-dice-size').textContent=currentSettings.diceScale;
   document.getElementById('lbl-dice-gap').textContent=currentSettings.diceGap;
   document.getElementById('lbl-dice-vshift').textContent=currentSettings.diceVshift;
+  syncFxToggles();
+}
+function syncFxToggles(){
+  FX_KEYS.forEach(function(k){
+    var b=document.getElementById('tg-'+k);
+    if(b)b.className='fx-tgl'+(fxOn(k)?' on':'');
+  });
+}
+function toggleFx(key){
+  currentSettings[key]=fxOn(key)?0:1;
+  saveSettings(currentSettings);
+  syncFxToggles();
+  applyFx();
 }
 function applySettings(){
   // Read from sliders
@@ -1964,7 +2174,10 @@ function applySettings(){
   var ds=+document.getElementById('sl-dice-size').value;
   var dg=+document.getElementById('sl-dice-gap').value;
   var dv=+document.getElementById('sl-dice-vshift').value;
-  currentSettings={rowHeight:rh,headerSize:hs,diceScale:ds,diceGap:dg,diceVshift:dv};
+  var next={rowHeight:rh,headerSize:hs,diceScale:ds,diceGap:dg,diceVshift:dv};
+  // Carry the effect toggles through — the sliders don't own them.
+  FX_KEYS.forEach(function(k){next[k]=currentSettings&&currentSettings[k]!==undefined?currentSettings[k]:SETTINGS_DEFAULTS[k];});
+  currentSettings=next;
   saveSettings(currentSettings);
   // Update labels
   document.getElementById('lbl-row-height').textContent=rh;
