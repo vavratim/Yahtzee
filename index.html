@@ -275,14 +275,23 @@ input[type=range].setting-slider::-webkit-slider-thumb{-webkit-appearance:none;w
   -webkit-text-stroke:1px rgba(0,0,0,.45);
 }
 
-@keyframes yzShake{
-  0%,100%{transform:translate(0,0)}
-  20%{transform:translate(-6px,3px)}
-  40%{transform:translate(6px,-4px)}
-  60%{transform:translate(-5px,-2px)}
-  80%{transform:translate(5px,3px)}
+/* Screen shake is driven from JS now so its strength can scale with the event
+   (hold tap < scoring < Yahtzee) instead of being one fixed keyframe. */
+
+/* Floating score text */
+.score-pop{position:fixed;z-index:520;pointer-events:none;
+  font-weight:800;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap;
+  color:#f5a623;
+  text-shadow:0 2px 6px rgba(0,0,0,.85),0 0 14px rgba(245,166,35,.45);
+  -webkit-text-stroke:1px rgba(0,0,0,.4);
+  opacity:0;transform:translate(-50%,-50%) scale(.6);
+  animation:scorePop 1.05s cubic-bezier(.2,.9,.3,1) forwards}
+@keyframes scorePop{
+  0%{opacity:0;transform:translate(-50%,-50%) scale(.6)}
+  22%{opacity:1;transform:translate(-50%,-62%) scale(1.14)}
+  38%{opacity:1;transform:translate(-50%,-66%) scale(1)}
+  100%{opacity:0;transform:translate(-50%,-125%) scale(1.02)}
 }
-.app.yz-shake{animation:yzShake .5s ease}
 </style>
 </head>
 <body>
@@ -340,6 +349,9 @@ input[type=range].setting-slider::-webkit-slider-thumb{-webkit-appearance:none;w
       <div class="fx-toggles">
         <button class="fx-tgl" id="tg-fxLighting" onclick="toggleFx('fxLighting')">Lighting &amp; materials</button>
         <button class="fx-tgl" id="tg-fxPost" onclick="toggleFx('fxPost')">Bloom &amp; post</button>
+        <button class="fx-tgl" id="tg-fxParticles" onclick="toggleFx('fxParticles')">Particles</button>
+        <button class="fx-tgl" id="tg-fxShake" onclick="toggleFx('fxShake')">Screen shake</button>
+        <button class="fx-tgl" id="tg-fxJuice" onclick="toggleFx('fxJuice')">Juice (squash, text)</button>
       </div>
     </div>
     <button class="settings-reset" onclick="swapSides()" style="margin-bottom:6px;color:rgba(255,255,255,.6);">⇄ Swap dice / scores sides</button>
@@ -546,6 +558,77 @@ function initThreeConsts(){
 }
 
 
+// ── Dice sparks ──────────────────────────────────────────────────────────────
+// A fixed pool of additively-blended points inside the dice scene, so landing
+// sparks pick up the bloom. Recycled round-robin; nothing is allocated per hit.
+var SPARK_MAX=240;
+function initSparks(){
+  var st=stage;if(!st||st.sparks)return;
+  var pos=new Float32Array(SPARK_MAX*3),col=new Float32Array(SPARK_MAX*3);
+  var g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  g.setAttribute('color',new THREE.BufferAttribute(col,3));
+  var pts=new THREE.Points(g,new THREE.PointsMaterial({
+    size:0.075,vertexColors:true,transparent:true,depthWrite:false,
+    blending:THREE.AdditiveBlending,sizeAttenuation:true
+  }));
+  pts.frustumCulled=false;pts.visible=false;
+  st.scene.add(pts);
+  st.sparks={pts:pts,pos:pos,col:col,
+             vel:new Float32Array(SPARK_MAX*3),rgb:new Float32Array(SPARK_MAX*3),
+             life:new Float32Array(SPARK_MAX),max:new Float32Array(SPARK_MAX),next:0};
+  for(var i=0;i<SPARK_MAX;i++)st.sparks.life[i]=1e9;   // start all dead
+}
+
+function emitSparks3D(x,y,z,n,spread){
+  var st=stage;if(!st||!st.sparks||!fxOn('fxParticles'))return;
+  var S=st.sparks;
+  spread=spread||0.25;
+  for(var k=0;k<n;k++){
+    var i=S.next;S.next=(S.next+1)%SPARK_MAX;
+    var a=Math.random()*Math.PI*2,sp=(0.014+Math.random()*0.030);
+    S.pos[i*3]=x+(Math.random()-0.5)*spread*0.6;
+    S.pos[i*3+1]=y+(Math.random()-0.5)*spread*0.12;
+    S.pos[i*3+2]=z;
+    S.vel[i*3]=Math.cos(a)*sp*1.5;
+    S.vel[i*3+1]=Math.abs(Math.sin(a))*sp*0.8+0.010;
+    S.vel[i*3+2]=(Math.random()-0.5)*sp*0.4;
+    S.life[i]=0;S.max[i]=18+Math.random()*20;
+    var warm=Math.random();
+    S.rgb[i*3]=1;S.rgb[i*3+1]=0.70+warm*0.26;S.rgb[i*3+2]=0.25+warm*0.45;
+  }
+  st.dirty=true;
+}
+
+function updateSparks(step){
+  var st=stage;if(!st||!st.sparks)return false;
+  var S=st.sparks,any=false;
+  for(var i=0;i<SPARK_MAX;i++){
+    if(S.life[i]>=S.max[i]){S.col[i*3]=S.col[i*3+1]=S.col[i*3+2]=0;continue;}
+    any=true;
+    S.life[i]+=step;
+    S.vel[i*3+1]-=0.00052*step;                 // gravity
+    S.pos[i*3]  +=S.vel[i*3]*step;
+    S.pos[i*3+1]+=S.vel[i*3+1]*step;
+    S.pos[i*3+2]+=S.vel[i*3+2]*step;
+    var f=1-S.life[i]/S.max[i];f*=f;
+    S.col[i*3]=S.rgb[i*3]*f;S.col[i*3+1]=S.rgb[i*3+1]*f;S.col[i*3+2]=S.rgb[i*3+2]*f;
+  }
+  S.pts.visible=any;
+  if(any){
+    S.pts.geometry.attributes.position.needsUpdate=true;
+    S.pts.geometry.attributes.color.needsUpdate=true;
+  }
+  return any;
+}
+
+// Nudge the camera in for a beat on a big moment.
+function cameraPush(amount){
+  var st=stage;if(!st)return;
+  st.push=Math.max(st.push||0,amount);
+  st.dirty=true;
+}
+
 // ── Post-processing ──────────────────────────────────────────────────────────
 // pmndrs postprocessing rather than three's EffectComposer: one fullscreen
 // pass for all three effects, and mipmap bloom at half resolution.
@@ -632,8 +715,10 @@ function initDiceStage(){
   stage={renderer:renderer,scene:scene,camera:camera,canvas:canvas,panel:panel,
          env:env,amb:amb,key:key,fill:fill,catcher:catcher,
          dies:{},wpp:1,needLayout:true,lastLayout:0,reordering:false,raf:null,
-         composer:null,bloom:null,vignette:null,ca:null,caPulse:0,caPeak:0};
+         composer:null,bloom:null,vignette:null,ca:null,caPulse:0,caPeak:0,
+         sparks:null,push:0};
   buildComposer();
+  initSparks();
 
   resizeStage();
   applyFx();
@@ -743,6 +828,12 @@ function stageLoop(){
         if(Math.abs(mesh.quaternion.dot(anim.targetQuat))>0.9995){
           mesh.quaternion.copy(anim.targetQuat);
           anim.active=false;
+          mesh.userData.sq=1;                       // squash-and-settle
+          // Spawn just in front of the die's bottom edge — at the die's own z
+          // the sparks would be born inside the cube and never escape it.
+          var hw=(mesh.userData.box||0.6)*DIE_REST*0.5;
+          emitSparks3D(mesh.position.x,mesh.position.y-hw*0.9,mesh.position.z+hw*1.15,12,hw);
+          screenShake(1.5);
           if(anim.onDone)anim.onDone();
         }
       }
@@ -754,11 +845,33 @@ function stageLoop(){
     var box=mesh.userData.box;
     if(box!==undefined){
       var want=box*(anim.active?DIE_ROLL:DIE_REST);
-      var cur=mesh.scale.x;
-      if(Math.abs(cur-want)>want*0.004){mesh.scale.setScalar(cur+(want-cur)*ease(0.18));moving=true;}
-      else mesh.scale.setScalar(want);
+      var cur=mesh.userData.baseScale;
+      if(cur===undefined)cur=want;
+      if(Math.abs(cur-want)>want*0.004){cur=cur+(want-cur)*ease(0.18);moving=true;}
+      else cur=want;
+      mesh.userData.baseScale=cur;
+      var sq=mesh.userData.sq||0;
+      if(sq>0.002&&fxOn('fxJuice')){
+        sq=Math.max(0,sq-0.055*step);
+        mesh.userData.sq=sq;
+        // damped wobble: squat on impact, overshoot, settle
+        var w=Math.sin(sq*Math.PI*3)*sq*0.24;
+        mesh.scale.set(cur*(1+w),cur*(1-w*1.35),cur*(1+w));
+        moving=true;
+      } else {
+        mesh.userData.sq=0;
+        mesh.scale.setScalar(cur);
+      }
     }
     if(anim.active)moving=true;
+  }
+  if(updateSparks(step))moving=true;
+  if(st.push>0.004){
+    st.push*=Math.pow(0.045,dt/1000);
+    st.camera.position.z=STAGE_DIST-st.push;
+    moving=true;
+  } else if(st.push){
+    st.push=0;st.camera.position.z=STAGE_DIST;moving=true;
   }
   // Nothing moving and nothing changed? Draw only on a slow tick so the idle
   // bob keeps going without paying for a full-rate redraw of a physical
@@ -1448,6 +1561,7 @@ function rollDice(){
 function toggleHold(origIdx){
   if(rollCount===0||rollCount>=MAX_ROLLS)return;
   held[origIdx]=!held[origIdx];
+  screenShake(1.8);
   updateDieHeld(origIdx,held[origIdx],dice[origIdx]);
   // Update held ring
   var w=diceWraps[origIdx];
@@ -1514,12 +1628,40 @@ function claimScore(id,val){
   if(!isLegalScore(id,isUpper))return;
   var gotYahtzee=isYahtzee(dice);
   // award +100 bonus for extra Yahtzee
+  var extraYahtzee=false;
   if(gotYahtzee&&scores['yh']===50){
     yahtzeeBonus+=100;
+    extraYahtzee=true;
   }
+  // Grab the row's position before the scorecard is rebuilt under us, so the
+  // burst and the floating total land on the box that was just filled.
+  var rowEl=document.querySelector('.score-row[data-cat="'+id+'"]');
+  var rect=rowEl?rowEl.getBoundingClientRect():null;
+  var upBefore=UPPER_CATS.reduce(function(a,c){return a+(scores[c.id]||0)},0);
+
   scores[id]=val;
   held=[false,false,false,false,false];rollCount=0;dice=[0,0,0,0,0];slotOrder=null;
   render();
+
+  // Scoring juice: a burst out of the filled row, the points floating up, and
+  // a kick that scales with how good the box was.
+  if(rect&&rect.width){
+    var px=rect.left+rect.width*0.62,py=rect.top+rect.height/2;
+    yzBurst(px,py,0.7,val>0?16:6,val>0?5:2);
+    popScore((val>0?'+':'')+val,px,py-4,val>0?'#f5a623':'#7a8499',val>=30?27:22);
+    screenShake(val>0?2.4+Math.min(val,50)/12:1.2);
+    if(extraYahtzee){
+      setTimeout(function(){popScore('+100 BONUS',px,py-30,'#ff6a4d',20)},260);
+    }
+    var upAfter=UPPER_CATS.reduce(function(a,c){return a+(scores[c.id]||0)},0);
+    if(upBefore<UPPER_TARGET&&upAfter>=UPPER_TARGET){
+      setTimeout(function(){
+        popScore('UPPER BONUS +'+UPPER_BONUS,window.innerWidth/2,py-46,'#74c69d',22);
+        yzBurst(window.innerWidth/2,py-46,0.8,22,6);
+        screenShake(6);
+      },340);
+    }
+  }
   if(gotYahtzee){
     yahtzeeCount++;
     celebrateYahtzee(yahtzeeCount);
@@ -1541,12 +1683,130 @@ function calcTotal(){
   return up+(up>=UPPER_TARGET?UPPER_BONUS:0)+LOWER_CATS.reduce(function(a,c){return a+(scores[c.id]||0)},0)+yahtzeeBonus;
 }
 
+// ── Screen shake ─────────────────────────────────────────────────────────────
+// Amplitude in pixels, scaled by how big the moment was. Repeat calls take the
+// strongest value rather than stacking, so five dice landing at once don't add
+// up to a jolt. Decay is time-based so it feels the same at any frame rate.
+var shakeAmp=0,shakeRAF=null,shakeLast=0;
+function screenShake(amp){
+  if(!fxOn('fxShake'))return;
+  shakeAmp=Math.max(shakeAmp,amp);
+  if(!shakeRAF){
+    shakeLast=(window.performance&&performance.now)?performance.now():Date.now();
+    shakeRAF=requestAnimationFrame(shakeLoop);
+  }
+}
+function shakeLoop(){
+  var app=document.querySelector('.app');
+  if(!app){shakeRAF=null;return;}
+  var now=(window.performance&&performance.now)?performance.now():Date.now();
+  var dt=Math.min(100,now-shakeLast);shakeLast=now;
+  shakeAmp*=Math.pow(0.0022,dt/1000);
+  if(shakeAmp<0.25){
+    shakeAmp=0;app.style.transform='';shakeRAF=null;return;
+  }
+  var a=shakeAmp;
+  app.style.transform='translate('+((Math.random()*2-1)*a).toFixed(2)+'px,'+
+                                   ((Math.random()*2-1)*a*0.7).toFixed(2)+'px)';
+  shakeRAF=requestAnimationFrame(shakeLoop);
+}
+
+// ── Floating score text ──────────────────────────────────────────────────────
+function popScore(text,x,y,color,size){
+  if(!fxOn('fxJuice'))return;
+  var d=document.createElement('div');
+  d.className='score-pop';
+  d.textContent=text;
+  d.style.left=Math.round(x)+'px';
+  d.style.top=Math.round(y)+'px';
+  d.style.fontSize=(size||22)+'px';
+  if(color)d.style.color=color;
+  document.body.appendChild(d);
+  setTimeout(function(){if(d.parentNode)d.parentNode.removeChild(d)},1200);
+}
+
 // ── Yahtzee celebration ─────────────────────────────────────────
 // A riveted steel plate stamps in over a burst of welding sparks and metal
 // shards, in keeping with the app's industrial look (no confetti/neon).
 // Size, spark count and duration all scale with how many Yahtzees have
 // landed this game (1=single, 2=double, 3+=triple).
 var yzCanvas,yzCtx,yzParticles=[],yzRAF=null,yzResizeBound=false;
+var yzBannerUntil=0;
+var YZ_SPARKS=['#f5a623','#ffd479','#fff3d6','#e94560'];
+var YZ_SHARDS=['#5b6272','#3a4150','#7a8499'];
+
+// The full-screen canvas is shared: the Yahtzee celebration and the smaller
+// burst fired when a category is scored both feed the same particle pool, and
+// the loop runs only while something is still alive.
+function yzEnsureCanvas(){
+  if(!yzCanvas){
+    yzCanvas=document.getElementById('yz-canvas');
+    if(!yzCanvas)return null;
+    yzCtx=yzCanvas.getContext('2d');
+  }
+  if(!yzResizeBound){window.addEventListener('resize',yzResize);yzResizeBound=true;}
+  if(yzCanvas.width!==window.innerWidth||yzCanvas.height!==window.innerHeight)yzResize();
+  var el=document.getElementById('yz-celebrate');
+  if(el)el.classList.add('show');
+  return yzCtx;
+}
+
+// Welding sparks and metal shards thrown from a point, in page coordinates.
+function yzBurst(cx,cy,scale,sparkN,shardN){
+  if(!fxOn('fxParticles'))return;
+  var i,a,sp,list=[];
+  for(i=0;i<sparkN;i++){
+    a=Math.random()*Math.PI*2;sp=(3+Math.random()*7)*scale;
+    list.push({type:'spark',x:cx,y:cy,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-3*scale,
+      len:6+Math.random()*10,color:YZ_SPARKS[(Math.random()*YZ_SPARKS.length)|0],
+      life:0,maxLife:30+Math.random()*24});
+  }
+  for(i=0;i<shardN;i++){
+    a=Math.random()*Math.PI*2;sp=(1.5+Math.random()*4)*scale;
+    list.push({type:'shard',x:cx,y:cy,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-3*scale,
+      size:3+Math.random()*5,color:YZ_SHARDS[(Math.random()*YZ_SHARDS.length)|0],
+      rot:Math.random()*Math.PI*2,vr:(Math.random()-0.5)*0.35,
+      life:0,maxLife:70+Math.random()*40});
+  }
+  yzParticles=yzParticles.concat(list);
+  if(yzEnsureCanvas()&&!yzRAF)yzRAF=requestAnimationFrame(yzLoop);
+}
+
+function yzLoop(){
+  if(!yzCtx){yzRAF=null;return;}
+  yzCtx.clearRect(0,0,yzCanvas.width,yzCanvas.height);
+  var alive=[];
+  for(var i=0;i<yzParticles.length;i++){
+    var p=yzParticles[i];
+    if(p.life>p.maxLife)continue;
+    alive.push(p);
+    p.vy+=0.15;p.x+=p.vx;p.y+=p.vy;p.life++;
+    if(p.type==='spark')p.vx*=0.97;
+    var fade=1-Math.max(0,(p.life-p.maxLife*0.7)/(p.maxLife*0.3));
+    yzCtx.save();
+    yzCtx.globalAlpha=Math.max(0,Math.min(1,fade));
+    if(p.type==='spark'){
+      var spd=Math.hypot(p.vx,p.vy)||1;
+      yzCtx.strokeStyle=p.color;yzCtx.lineWidth=1.6;yzCtx.lineCap='round';
+      yzCtx.beginPath();yzCtx.moveTo(p.x,p.y);
+      yzCtx.lineTo(p.x-(p.vx/spd)*p.len,p.y-(p.vy/spd)*p.len);yzCtx.stroke();
+    } else {
+      p.rot+=p.vr;
+      yzCtx.translate(p.x,p.y);yzCtx.rotate(p.rot);
+      yzCtx.fillStyle=p.color;yzCtx.fillRect(-p.size/2,-p.size/3,p.size,p.size*0.65);
+    }
+    yzCtx.restore();
+  }
+  yzParticles=alive;
+  if(yzParticles.length){yzRAF=requestAnimationFrame(yzLoop);return;}
+  yzRAF=null;
+  yzCtx.clearRect(0,0,yzCanvas.width,yzCanvas.height);
+  // Only pull the overlay once the banner is finished with it too.
+  if(Date.now()>yzBannerUntil){
+    var el=document.getElementById('yz-celebrate');
+    if(el)el.classList.remove('show');
+  }
+}
 
 function yzResize(){
   if(!yzCanvas)return;
@@ -1588,94 +1848,25 @@ function celebrateYahtzee(count){
     beaconBot.className='yz-beacon bottom';void beaconBot.offsetWidth;beaconBot.className='yz-beacon bottom go';
   }
 
-  yzParticles=[];
-  var nSparks=45+tier*35,nShards=8+tier*8;
   var cx=window.innerWidth/2,cy=window.innerHeight*0.4;
-  for(var i=0;i<nSparks;i++){
-    var ang=Math.random()*Math.PI*2;
-    var speed=(3+Math.random()*7)*(0.85+tier*0.25);
-    yzParticles.push({
-      type:'spark',
-      x:cx,y:cy,
-      vx:Math.cos(ang)*speed,
-      vy:Math.sin(ang)*speed-3,
-      len:6+Math.random()*10,
-      color:sparkColors[Math.floor(Math.random()*sparkColors.length)],
-      life:0,
-      maxLife:34+Math.random()*22+tier*8
-    });
-  }
-  for(var i=0;i<nShards;i++){
-    var ang=Math.random()*Math.PI*2;
-    var speed=(1.5+Math.random()*4)*(0.85+tier*0.2);
-    yzParticles.push({
-      type:'shard',
-      x:cx,y:cy,
-      vx:Math.cos(ang)*speed,
-      vy:Math.sin(ang)*speed-3,
-      size:3+Math.random()*5,
-      color:shardColors[Math.floor(Math.random()*shardColors.length)],
-      rot:Math.random()*Math.PI*2,
-      vr:(Math.random()-0.5)*0.35,
-      life:0,
-      maxLife:80+Math.random()*40+tier*20
-    });
-  }
+  yzBurst(cx,cy,0.85+tier*0.25,45+tier*35,8+tier*8);
 
   // Chromatic-aberration kick, bigger for double/triple
   if(typeof pulseAberration==='function')pulseAberration(0.0022+tier*0.0016);
 
-  if(tier>=3){
-    var app=document.querySelector('.app');
-    app.classList.remove('yz-shake');void app.offsetWidth;app.classList.add('yz-shake');
-    setTimeout(function(){app.classList.remove('yz-shake')},600);
-  }
+  screenShake(5+tier*3.5);
+  cameraPush(0.9+tier*0.5);
 
-  if(yzRAF)cancelAnimationFrame(yzRAF);
-  var start=Date.now();
   var duration=1600+tier*650;
-  function tick(){
-    yzCtx.clearRect(0,0,yzCanvas.width,yzCanvas.height);
-    var alive=false;
-    yzParticles.forEach(function(p){
-      if(p.life>p.maxLife)return;
-      alive=true;
-      p.vy+=0.15;
-      p.x+=p.vx;p.y+=p.vy;p.life++;
-      if(p.type==='spark')p.vx*=0.97;
-      var fade=1-Math.max(0,(p.life-p.maxLife*0.7)/(p.maxLife*0.3));
-      yzCtx.save();
-      yzCtx.globalAlpha=Math.max(0,Math.min(1,fade));
-      if(p.type==='spark'){
-        var sp=Math.hypot(p.vx,p.vy)||1;
-        yzCtx.strokeStyle=p.color;
-        yzCtx.lineWidth=1.6;
-        yzCtx.lineCap='round';
-        yzCtx.beginPath();
-        yzCtx.moveTo(p.x,p.y);
-        yzCtx.lineTo(p.x-(p.vx/sp)*p.len,p.y-(p.vy/sp)*p.len);
-        yzCtx.stroke();
-      } else {
-        p.rot+=p.vr;
-        yzCtx.translate(p.x,p.y);
-        yzCtx.rotate(p.rot);
-        yzCtx.fillStyle=p.color;
-        yzCtx.fillRect(-p.size/2,-p.size/3,p.size,p.size*0.65);
-      }
-      yzCtx.restore();
-    });
-    if(Date.now()-start<duration&&alive){
-      yzRAF=requestAnimationFrame(tick);
-    } else {
-      yzCtx.clearRect(0,0,yzCanvas.width,yzCanvas.height);
-      plate.className='yz-plate fade';
-      setTimeout(function(){
-        el.classList.remove('show');
-        plate.className='yz-plate';
-      },400);
-    }
-  }
-  tick();
+  yzBannerUntil=Date.now()+duration;
+  yzEnsureCanvas();
+  setTimeout(function(){
+    plate.className='yz-plate fade';
+    setTimeout(function(){
+      plate.className='yz-plate';
+      if(!yzParticles.length)el.classList.remove('show');
+    },400);
+  },duration);
 }
 
 function getRankText(score){
@@ -1715,6 +1906,7 @@ var VERSION_LOG=[
   {v:'3.3', note:'Home Screen icons added — riveted steel die icon + manifest so the app looks right when installed. Yahtzee celebration restyled to match: confetti replaced with welding sparks and metal shards, banner is a riveted, hazard-striped steel plate that stamps in instead of bouncing, plus a warning-beacon flash on double/triple Yahtzee.'},
   {v:'4.0', note:'Rendering rebuilt on a single WebGL renderer: all five dice now share one scene, camera and animation loop (was five renderers and five loops), with the dice DOM kept as the layout and tap layer so sliders, reordering and swap-sides drive the 3D dice directly. Lighting and materials upgraded — PMREM studio environment, ACES filmic tone mapping, physical clearcoat dice with the pips as drilled recesses, emissive held dice, and soft contact shadows. Face textures are now cached instead of rebuilt on every roll. New Effects toggle in settings to compare the lighting on/off.'},
   {v:'4.1', note:'Phase 2 — post-processing. three.js upgraded from r128 to 0.185.1 (pinned ES module build via importmap; the game script stays a classic script so inline handlers and globals are unchanged), with colour management and light intensities migrated to the modern API. Added pmndrs postprocessing: mipmap bloom at half resolution, a faint vignette, and a chromatic-aberration pulse that fires on a Yahtzee and scales with double/triple. Dice animation is now driven by elapsed time instead of frame count, so a roll takes the same wall-clock time regardless of frame rate. New Bloom & post toggle in settings.'},
+  {v:'4.2', note:'Phase 3 — juice. Screen shake scaled to the moment (holding a die < scoring < Yahtzee), squash-and-settle as each die lands, and a burst of additive 3D sparks at the contact edge that the bloom picks up. Scoring now throws a spark burst out of the filled row and floats the points up, with callouts for the +100 extra-Yahtzee bonus and for crossing the upper bonus. The camera pushes in briefly on a Yahtzee. The celebration and scoring effects now share one particle pool instead of the celebration owning its own one-shot run. Three new toggles: Particles, Screen shake, and Juice.'},
 ];
 
 function toggleVerLog(){
@@ -2116,6 +2308,7 @@ function makeRow(cat,isUpper,targetNum,rl){
   var jokerBlocked=!used&&rolled&&js.active&&!legal;
 
   var row=document.createElement('div');
+  row.dataset.cat=catId;
   if(used){
     row.className='score-row used';
     row.style.background='#0d0f1a';
@@ -2207,8 +2400,9 @@ function render(){renderDice();fitDice();renderScorecard();document.getElementBy
 var SETTINGS_KEY='yahtzee_settings_v2';
 // fx* keys are the effect-group toggles (1 = on). Each new effect phase adds
 // one here and one button in the settings panel so it can be A/B'd.
-var SETTINGS_DEFAULTS={rowHeight:32,headerSize:20,diceScale:100,diceGap:0,diceVshift:0,fxLighting:1,fxPost:1};
-var FX_KEYS=['fxLighting','fxPost'];
+var SETTINGS_DEFAULTS={rowHeight:32,headerSize:20,diceScale:100,diceGap:0,diceVshift:0,
+  fxLighting:1,fxPost:1,fxParticles:1,fxShake:1,fxJuice:1};
+var FX_KEYS=['fxLighting','fxPost','fxParticles','fxShake','fxJuice'];
 function fxOn(key){return !!(currentSettings&&currentSettings[key]);}
 var currentSettings={};
 
@@ -2250,6 +2444,11 @@ function syncFxToggles(){
 function toggleFx(key){
   currentSettings[key]=fxOn(key)?0:1;
   saveSettings(currentSettings);
+  if(key==='fxShake'&&!currentSettings[key]){
+    shakeAmp=0;
+    if(shakeRAF){cancelAnimationFrame(shakeRAF);shakeRAF=null;}
+    var app=document.querySelector('.app');if(app)app.style.transform='';
+  }
   syncFxToggles();
   applyFx();
   if(stage)stage.dirty=true;
