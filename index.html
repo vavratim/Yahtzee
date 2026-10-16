@@ -36,6 +36,7 @@ if(window.__boot)window.__boot(); else window.__threeReady=true;
   --text:#eaeaea;--muted:#7a8499;--green:#40916c;--radius:10px;
   /* Fallbacks only — fitDice() measures the panel and overwrites these at runtime
      so the dice always fill whatever vertical space is actually available. */
+  --surface-glass:rgba(22,33,62,.74);
   --slot:120px;
   --die:117px;
   --dice-vshift:0px;
@@ -43,8 +44,11 @@ if(window.__boot)window.__boot(); else window.__threeReady=true;
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body{height:100%;overflow:hidden}
 body{font-family:-apple-system,'SF Pro Display','Helvetica Neue',sans-serif;background:var(--bg);color:var(--text)}
+/* Animated shader backdrop; sits above the body fill but under everything else */
+#bg-stage{position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;display:block}
 
 .app{
+  position:relative;z-index:1;
   display:flex;flex-direction:column;
   height:100vh;height:-webkit-fill-available;
   max-width:430px;margin:0 auto;
@@ -67,7 +71,7 @@ body{font-family:-apple-system,'SF Pro Display','Helvetica Neue',sans-serif;back
 /* ── Dice panel ── */
 .dice-panel{
   width:calc(var(--slot) + 6px);flex-shrink:0;
-  background:var(--surface);border-radius:var(--radius);
+  background:var(--surface-glass,var(--surface));border-radius:var(--radius);
   display:flex;flex-direction:column;align-items:center;justify-content:center;
   padding:1px 3px;
   position:relative;
@@ -96,7 +100,7 @@ body{font-family:-apple-system,'SF Pro Display','Helvetica Neue',sans-serif;back
 .btn-roll:disabled{opacity:.32;cursor:default}
 
 /* ── Scores panel ── */
-.scores-panel{flex:1;min-width:0;background:var(--surface);border-radius:var(--radius);display:flex;flex-direction:column;overflow:hidden}
+.scores-panel{flex:1;min-width:0;background:var(--surface-glass,var(--surface));border-radius:var(--radius);display:flex;flex-direction:column;overflow:hidden}
 .sec-header{display:flex;align-items:center;justify-content:space-between;padding:2px 6px;background:rgba(0,0,0,.22);flex-shrink:0;gap:4px}
 .sec-lbl{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
 .hdr-btns{display:flex;gap:4px}
@@ -295,6 +299,7 @@ input[type=range].setting-slider::-webkit-slider-thumb{-webkit-appearance:none;w
 </style>
 </head>
 <body>
+<canvas id="bg-stage"></canvas>
 <div class="app">
   <div class="header">
     <h1>Yahtzee</h1>
@@ -352,6 +357,9 @@ input[type=range].setting-slider::-webkit-slider-thumb{-webkit-appearance:none;w
         <button class="fx-tgl" id="tg-fxParticles" onclick="toggleFx('fxParticles')">Particles</button>
         <button class="fx-tgl" id="tg-fxShake" onclick="toggleFx('fxShake')">Screen shake</button>
         <button class="fx-tgl" id="tg-fxJuice" onclick="toggleFx('fxJuice')">Juice (squash, text)</button>
+        <button class="fx-tgl" id="tg-fxBackground" onclick="toggleFx('fxBackground')">Backdrop</button>
+        <button class="fx-tgl" id="tg-fxSound" onclick="toggleFx('fxSound')">Sound</button>
+        <button class="fx-tgl" id="tg-fxMusic" onclick="toggleFx('fxMusic')">Music</button>
       </div>
     </div>
     <button class="settings-reset" onclick="swapSides()" style="margin-bottom:6px;color:rgba(255,255,255,.6);">⇄ Swap dice / scores sides</button>
@@ -833,7 +841,7 @@ function stageLoop(){
           // the sparks would be born inside the cube and never escape it.
           var hw=(mesh.userData.box||0.6)*DIE_REST*0.5;
           emitSparks3D(mesh.position.x,mesh.position.y-hw*0.9,mesh.position.z+hw*1.15,12,hw);
-          screenShake(1.5);
+          screenShake(1.5);sfxLand();
           if(anim.onDone)anim.onDone();
         }
       }
@@ -1532,6 +1540,7 @@ function rollDice(){
   }
   if(rollCount>=MAX_ROLLS||rolling)return;
   rolling=true;
+  unlockAudio();sfxRoll();
   // Roll new values first
   var newDice=dice.slice();
   for(var i=0;i<5;i++)if(!held[i])newDice[i]=rnd();
@@ -1561,7 +1570,7 @@ function rollDice(){
 function toggleHold(origIdx){
   if(rollCount===0||rollCount>=MAX_ROLLS)return;
   held[origIdx]=!held[origIdx];
-  screenShake(1.8);
+  screenShake(1.8);sfxHold();
   updateDieHeld(origIdx,held[origIdx],dice[origIdx]);
   // Update held ring
   var w=diceWraps[origIdx];
@@ -1647,6 +1656,8 @@ function claimScore(id,val){
   // a kick that scales with how good the box was.
   if(rect&&rect.width){
     var px=rect.left+rect.width*0.62,py=rect.top+rect.height/2;
+    sfxScore();
+    bgPulse(val>0?Math.min(1,0.45+val/90):0.25);
     yzBurst(px,py,0.7,val>0?16:6,val>0?5:2);
     popScore((val>0?'+':'')+val,px,py-4,val>0?'#f5a623':'#7a8499',val>=30?27:22);
     screenShake(val>0?2.4+Math.min(val,50)/12:1.2);
@@ -1681,6 +1692,236 @@ function claimScore(id,val){
 function calcTotal(){
   var up=UPPER_CATS.reduce(function(a,c){return a+(scores[c.id]||0)},0);
   return up+(up>=UPPER_TARGET?UPPER_BONUS:0)+LOWER_CATS.reduce(function(a,c){return a+(scores[c.id]||0)},0)+yahtzeeBonus;
+}
+
+// ── Sound ────────────────────────────────────────────────────────────────────
+// Everything is synthesised, so the app stays one file with no audio assets.
+// iOS will not start an AudioContext outside a user gesture, so the context is
+// created on the first tap and nothing is scheduled before that.
+var AC=null,audioMaster=null,audioReady=false;
+var musicTimer=null,musicStep=0;
+
+function unlockAudio(){
+  if(audioReady)return;
+  var Ctor=window.AudioContext||window.webkitAudioContext;
+  if(!Ctor)return;
+  try{
+    AC=new Ctor();
+    audioMaster=AC.createGain();
+    audioMaster.gain.value=0.9;
+    audioMaster.connect(AC.destination);
+    if(AC.state==='suspended')AC.resume();
+    audioReady=true;
+    if(fxOn('fxMusic'))startMusic();
+  }catch(e){audioReady=false;}
+}
+
+function sfxReady(){return audioReady&&AC&&fxOn('fxSound');}
+function rnd2(a,b){return a+Math.random()*(b-a);}
+
+// Short burst of filtered noise — the body of every impact sound.
+function noiseBurst(dur,freq,q,gain,type){
+  if(!sfxReady())return;
+  var n=Math.max(1,Math.floor(AC.sampleRate*dur));
+  var buf=AC.createBuffer(1,n,AC.sampleRate);
+  var d=buf.getChannelData(0);
+  for(var i=0;i<n;i++)d[i]=(Math.random()*2-1)*(1-i/n);
+  var src=AC.createBufferSource();src.buffer=buf;
+  var flt=AC.createBiquadFilter();
+  flt.type=type||'bandpass';flt.frequency.value=freq;flt.Q.value=q;
+  var g=AC.createGain();
+  g.gain.setValueAtTime(gain,AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.0001,AC.currentTime+dur);
+  src.connect(flt);flt.connect(g);g.connect(audioMaster);
+  src.start();src.stop(AC.currentTime+dur+0.02);
+}
+
+// Struck metal: a quick pitched ping with a fast decay.
+function ping(freq,dur,gain,type){
+  if(!sfxReady())return;
+  var o=AC.createOscillator(),g=AC.createGain();
+  o.type=type||'triangle';
+  o.frequency.setValueAtTime(freq,AC.currentTime);
+  o.frequency.exponentialRampToValueAtTime(Math.max(40,freq*0.7),AC.currentTime+dur);
+  g.gain.setValueAtTime(gain,AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.0001,AC.currentTime+dur);
+  o.connect(g);g.connect(audioMaster);
+  o.start();o.stop(AC.currentTime+dur+0.02);
+}
+
+// Every effect takes a little random pitch so repeats don't sound cloned.
+function sfxRoll(){   noiseBurst(0.26,rnd2(900,1300),1.1,0.16,'bandpass'); }
+function sfxHold(){   ping(rnd2(680,820),0.10,0.10); noiseBurst(0.05,2600,2.0,0.05); }
+function sfxLand(){   noiseBurst(0.09,rnd2(260,420),1.6,0.17); ping(rnd2(150,200),0.07,0.06,'sine'); }
+function sfxScore(){  noiseBurst(0.16,rnd2(380,520),1.2,0.18); ping(rnd2(300,360),0.16,0.09); }
+function sfxYahtzee(tier){
+  if(!sfxReady())return;
+  // forge hammer: deep hit, then a bright metallic ring
+  ping(rnd2(70,90),0.5,0.26,'sine');
+  noiseBurst(0.3,rnd2(220,300),0.8,0.22,'lowpass');
+  var base=rnd2(520,600);
+  for(var i=0;i<2+Math.min(tier,3);i++){
+    (function(k){setTimeout(function(){ping(base*(1+k*0.5),0.34,0.08);},70+k*85);})(i);
+  }
+}
+
+// ── Background music ─────────────────────────────────────────────────────────
+// A sparse industrial pulse. Tempo climbs as the scorecard fills.
+var MUSIC_NOTES=[110.00,130.81,146.83,164.81,196.00,164.81,146.83,130.81];
+function musicTempoMs(){
+  var filled=UPPER_CATS.concat(LOWER_CATS).filter(function(c){return scores&&scores[c.id]!==undefined}).length;
+  var level=Math.min(1,filled/13);
+  return 620-level*260;                     // ~97bpm climbing to ~165bpm
+}
+function startMusic(){
+  if(!audioReady||musicTimer||!fxOn('fxMusic'))return;
+  var tick=function(){
+    if(!fxOn('fxMusic')||!audioReady){stopMusic();return;}
+    var i=musicStep%8;
+    if(i===0||i===4){                        // kick
+      var o=AC.createOscillator(),g=AC.createGain();
+      o.type='sine';
+      o.frequency.setValueAtTime(96,AC.currentTime);
+      o.frequency.exponentialRampToValueAtTime(42,AC.currentTime+0.16);
+      g.gain.setValueAtTime(0.16,AC.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.0001,AC.currentTime+0.2);
+      o.connect(g);g.connect(audioMaster);o.start();o.stop(AC.currentTime+0.22);
+    }
+    if(i%2===1){                             // off-beat metallic tick
+      var o2=AC.createOscillator(),g2=AC.createGain();
+      o2.type='triangle';
+      o2.frequency.value=MUSIC_NOTES[i]*2;
+      g2.gain.setValueAtTime(0.030,AC.currentTime);
+      g2.gain.exponentialRampToValueAtTime(0.0001,AC.currentTime+0.13);
+      o2.connect(g2);g2.connect(audioMaster);o2.start();o2.stop(AC.currentTime+0.15);
+    }
+    var o3=AC.createOscillator(),g3=AC.createGain();   // bass line
+    o3.type='sawtooth';
+    o3.frequency.value=MUSIC_NOTES[i]/2;
+    var lp=AC.createBiquadFilter();lp.type='lowpass';lp.frequency.value=420;
+    g3.gain.setValueAtTime(0.045,AC.currentTime);
+    g3.gain.exponentialRampToValueAtTime(0.0001,AC.currentTime+0.3);
+    o3.connect(lp);lp.connect(g3);g3.connect(audioMaster);
+    o3.start();o3.stop(AC.currentTime+0.32);
+    musicStep++;
+    musicTimer=setTimeout(tick,musicTempoMs());
+  };
+  musicTimer=setTimeout(tick,10);
+}
+function stopMusic(){
+  if(musicTimer){clearTimeout(musicTimer);musicTimer=null;}
+}
+
+// ── Shader backdrop ──────────────────────────────────────────────────────────
+// A slow industrial grid on its own small WebGL context — raw GL rather than a
+// second three.js renderer, since it is one fullscreen triangle and no scene
+// graph. Rendered at reduced resolution because it is all low-frequency.
+var BG_SCALE=0.55;          // backing store relative to CSS pixels
+var bg=null;
+
+var BG_VERT='attribute vec2 p;void main(){gl_Position=vec4(p,0.0,1.0);}';
+var BG_FRAG=[
+'precision mediump float;',
+'uniform vec2 uRes;uniform float uTime,uPulse,uLevel;',
+'float hash(vec2 v){return fract(sin(dot(v,vec2(12.9898,78.233)))*43758.5453);}',
+'void main(){',
+'  vec2 uv=gl_FragCoord.xy/uRes;',
+'  vec2 p=uv*2.0-1.0;p.x*=uRes.x/uRes.y;',
+'  float r=length(p);',
+// slow drifting machine-shop grid, denser toward the floor
+'  vec2 g=vec2(p.x*3.4,p.y*3.4+uTime*0.05);',
+'  vec2 gf=abs(fract(g)-0.5);',
+'  float line=smoothstep(0.035,0.0,min(gf.x,gf.y));',
+'  vec2 g2=g*0.25;vec2 gf2=abs(fract(g2)-0.5);',
+'  float major=smoothstep(0.012,0.0,min(gf2.x,gf2.y));',
+// palette drifts from cold steel toward warm forge as the card fills
+'  vec3 cold=vec3(0.07,0.10,0.19);',
+'  vec3 warm=vec3(0.16,0.10,0.09);',
+'  vec3 base=mix(cold,warm,clamp(uLevel,0.0,1.0));',
+'  vec3 lineCol=mix(vec3(0.30,0.46,0.72),vec3(0.86,0.55,0.18),clamp(uLevel,0.0,1.0));',
+// a slow bright band sweeping down, like a shop light passing
+'  float band=smoothstep(0.35,0.0,abs(fract(uv.y*0.5-uTime*0.015)-0.5));',
+'  vec3 col=base+lineCol*(line*0.16+major*0.26)*(0.45+band*0.75);',
+// pulse: a ring pushing out from the middle on a scoring hit
+'  float ring=smoothstep(0.26,0.0,abs(r-(1.0-uPulse)*1.5));',
+'  col+=lineCol*ring*uPulse*0.5;',
+'  col+=lineCol*uPulse*0.06;',
+'  col*=1.0-0.40*smoothstep(0.55,1.65,r);',          // vignette
+'  col+=(hash(gl_FragCoord.xy+uTime)-0.5)*0.016;',   // grain breaks up banding
+'  gl_FragColor=vec4(col,1.0);',
+'}'].join('\n');
+
+function initBackdrop(){
+  if(bg)return bg;
+  var cv=document.getElementById('bg-stage');
+  if(!cv)return null;
+  var gl=cv.getContext('webgl',{antialias:false,alpha:false,depth:false,stencil:false})||
+         cv.getContext('experimental-webgl');
+  if(!gl)return null;
+  function compile(type,src){
+    var sh=gl.createShader(type);gl.shaderSource(sh,src);gl.compileShader(sh);
+    if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS))return null;
+    return sh;
+  }
+  var vs=compile(gl.VERTEX_SHADER,BG_VERT),fs=compile(gl.FRAGMENT_SHADER,BG_FRAG);
+  if(!vs||!fs)return null;
+  var prog=gl.createProgram();
+  gl.attachShader(prog,vs);gl.attachShader(prog,fs);gl.linkProgram(prog);
+  if(!gl.getProgramParameter(prog,gl.LINK_STATUS))return null;
+  gl.useProgram(prog);
+  var buf=gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+  var loc=gl.getAttribLocation(prog,'p');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+  bg={gl:gl,cv:cv,prog:prog,t0:Date.now(),pulse:0,level:0,raf:null,frame:0,
+      uRes:gl.getUniformLocation(prog,'uRes'),
+      uTime:gl.getUniformLocation(prog,'uTime'),
+      uPulse:gl.getUniformLocation(prog,'uPulse'),
+      uLevel:gl.getUniformLocation(prog,'uLevel')};
+  resizeBackdrop();
+  window.addEventListener('resize',resizeBackdrop);
+  backdropLoop();
+  return bg;
+}
+
+function resizeBackdrop(){
+  if(!bg)return;
+  var w=Math.max(1,Math.round(window.innerWidth*BG_SCALE));
+  var h=Math.max(1,Math.round(window.innerHeight*BG_SCALE));
+  if(bg.cv.width===w&&bg.cv.height===h)return;
+  bg.cv.width=w;bg.cv.height=h;
+  bg.gl.viewport(0,0,w,h);
+}
+
+// Ripple the backdrop on a scoring hit.
+function bgPulse(amount){ if(bg)bg.pulse=Math.max(bg.pulse,amount); }
+// 0..1, drives the palette drift as the scorecard fills.
+function bgSetLevel(v){ if(bg)bg.level=v; }
+
+function backdropLoop(){
+  if(!bg)return;
+  bg.raf=requestAnimationFrame(backdropLoop);
+  if(!fxOn('fxBackground')){
+    if(!bg.cleared){
+      bg.gl.clearColor(0.102,0.102,0.18,1.0);
+      bg.gl.clear(bg.gl.COLOR_BUFFER_BIT);
+      bg.cleared=true;
+    }
+    return;
+  }
+  bg.cleared=false;
+  // It is a slow, soft effect — half rate is indistinguishable and halves cost.
+  bg.frame++;
+  if(bg.frame%2)return;
+  if(bg.pulse>0.001)bg.pulse*=0.94; else bg.pulse=0;
+  var gl=bg.gl;
+  gl.uniform2f(bg.uRes,bg.cv.width,bg.cv.height);
+  gl.uniform1f(bg.uTime,(Date.now()-bg.t0)/1000);
+  gl.uniform1f(bg.uPulse,bg.pulse);
+  gl.uniform1f(bg.uLevel,bg.level);
+  gl.drawArrays(gl.TRIANGLES,0,3);
 }
 
 // ── Screen shake ─────────────────────────────────────────────────────────────
@@ -1856,6 +2097,8 @@ function celebrateYahtzee(count){
 
   screenShake(5+tier*3.5);
   cameraPush(0.9+tier*0.5);
+  sfxYahtzee(tier);
+  bgPulse(1);
 
   var duration=1600+tier*650;
   yzBannerUntil=Date.now()+duration;
@@ -1907,6 +2150,7 @@ var VERSION_LOG=[
   {v:'4.0', note:'Rendering rebuilt on a single WebGL renderer: all five dice now share one scene, camera and animation loop (was five renderers and five loops), with the dice DOM kept as the layout and tap layer so sliders, reordering and swap-sides drive the 3D dice directly. Lighting and materials upgraded — PMREM studio environment, ACES filmic tone mapping, physical clearcoat dice with the pips as drilled recesses, emissive held dice, and soft contact shadows. Face textures are now cached instead of rebuilt on every roll. New Effects toggle in settings to compare the lighting on/off.'},
   {v:'4.1', note:'Phase 2 — post-processing. three.js upgraded from r128 to 0.185.1 (pinned ES module build via importmap; the game script stays a classic script so inline handlers and globals are unchanged), with colour management and light intensities migrated to the modern API. Added pmndrs postprocessing: mipmap bloom at half resolution, a faint vignette, and a chromatic-aberration pulse that fires on a Yahtzee and scales with double/triple. Dice animation is now driven by elapsed time instead of frame count, so a roll takes the same wall-clock time regardless of frame rate. New Bloom & post toggle in settings.'},
   {v:'4.2', note:'Phase 3 — juice. Screen shake scaled to the moment (holding a die < scoring < Yahtzee), squash-and-settle as each die lands, and a burst of additive 3D sparks at the contact edge that the bloom picks up. Scoring now throws a spark burst out of the filled row and floats the points up, with callouts for the +100 extra-Yahtzee bonus and for crossing the upper bonus. The camera pushes in briefly on a Yahtzee. The celebration and scoring effects now share one particle pool instead of the celebration owning its own one-shot run. Three new toggles: Particles, Screen shake, and Juice.'},
+  {v:'4.3', note:'Phase 4 — atmosphere and sound. An animated shader backdrop on its own small WebGL context: a slow drifting machine-shop grid that ripples when a category is scored and drifts from cold steel to warm forge as the card fills. Panels went slightly translucent so it reads behind the board. Web Audio sound, all synthesised so the app stays a single file — dice clatter on roll, a click on hold, a thunk as each die lands, a press on scoring and a forge hammer on a Yahtzee, each with a little random pitch so repeats do not sound cloned. Optional background music whose tempo climbs as the scorecard fills. Audio is created on the first tap, as iOS requires, and nothing is scheduled before that. Three new toggles: Backdrop, Sound and Music (music off by default).'},
 ];
 
 function toggleVerLog(){
@@ -2394,15 +2638,21 @@ function makeRow(cat,isUpper,targetNum,rl){
   return row;
 }
 
-function render(){renderDice();fitDice();renderScorecard();document.getElementById('total').textContent=calcTotal()}
+// Palette of the backdrop drifts from cold steel to warm forge as the card fills.
+function syncBackdropLevel(){
+  if(!scores)return;
+  var filled=UPPER_CATS.concat(LOWER_CATS).filter(function(c){return scores[c.id]!==undefined}).length;
+  bgSetLevel(Math.min(1,filled/13));
+}
+function render(){renderDice();fitDice();renderScorecard();syncBackdropLevel();document.getElementById('total').textContent=calcTotal()}
 
 // ── Settings ─────────────────────────────────────────────────
 var SETTINGS_KEY='yahtzee_settings_v2';
 // fx* keys are the effect-group toggles (1 = on). Each new effect phase adds
 // one here and one button in the settings panel so it can be A/B'd.
 var SETTINGS_DEFAULTS={rowHeight:32,headerSize:20,diceScale:100,diceGap:0,diceVshift:0,
-  fxLighting:1,fxPost:1,fxParticles:1,fxShake:1,fxJuice:1};
-var FX_KEYS=['fxLighting','fxPost','fxParticles','fxShake','fxJuice'];
+  fxLighting:1,fxPost:1,fxParticles:1,fxShake:1,fxJuice:1,fxBackground:1,fxSound:1,fxMusic:0};
+var FX_KEYS=['fxLighting','fxPost','fxParticles','fxShake','fxJuice','fxBackground','fxSound','fxMusic'];
 function fxOn(key){return !!(currentSettings&&currentSettings[key]);}
 var currentSettings={};
 
@@ -2444,6 +2694,11 @@ function syncFxToggles(){
 function toggleFx(key){
   currentSettings[key]=fxOn(key)?0:1;
   saveSettings(currentSettings);
+  if(key==='fxMusic'){
+    if(currentSettings[key]){unlockAudio();startMusic();}
+    else stopMusic();
+  }
+  if(key==='fxSound'&&currentSettings[key])unlockAudio();
   if(key==='fxShake'&&!currentSettings[key]){
     shakeAmp=0;
     if(shakeRAF){cancelAnimationFrame(shakeRAF);shakeRAF=null;}
@@ -2508,6 +2763,11 @@ window.__boot=function(){
   if(window.__booted)return;
   window.__booted=true;
   initConstants();
+  initBackdrop();
+  // iOS only allows audio to start inside a user gesture.
+  ['pointerdown','touchend','click'].forEach(function(ev){
+    window.addEventListener(ev,unlockAudio,{once:true,passive:true});
+  });
   newGame();
   // Show current version number
   var v=document.getElementById('app-ver');
