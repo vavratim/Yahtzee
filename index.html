@@ -350,6 +350,10 @@ input[type=range].setting-slider::-webkit-slider-thumb{-webkit-appearance:none;w
       <input type="range" class="setting-slider" id="sl-dice-vshift" min="-80" max="80" step="1" oninput="applySettings()">
     </div>
     <div class="setting-row">
+      <div class="setting-label"><span>Shake sensitivity</span><span id="lbl-shake-sens">5</span></div>
+      <input type="range" class="setting-slider" id="sl-shake-sens" min="1" max="10" step="1" oninput="applySettings()">
+    </div>
+    <div class="setting-row">
       <div class="setting-label"><span>Effects</span><span></span></div>
       <div class="fx-toggles">
         <button class="fx-tgl" id="tg-fxLighting" onclick="toggleFx('fxLighting')">Lighting &amp; materials</button>
@@ -360,6 +364,7 @@ input[type=range].setting-slider::-webkit-slider-thumb{-webkit-appearance:none;w
         <button class="fx-tgl" id="tg-fxBackground" onclick="toggleFx('fxBackground')">Backdrop</button>
         <button class="fx-tgl" id="tg-fxSound" onclick="toggleFx('fxSound')">Sound</button>
         <button class="fx-tgl" id="tg-fxMusic" onclick="toggleFx('fxMusic')">Music</button>
+        <button class="fx-tgl" id="tg-fxShakeRoll" onclick="toggleFx('fxShakeRoll')">Shake to roll</button>
       </div>
     </div>
     <button class="settings-reset" onclick="swapSides()" style="margin-bottom:6px;color:rgba(255,255,255,.6);">⇄ Swap dice / scores sides</button>
@@ -2151,6 +2156,7 @@ var VERSION_LOG=[
   {v:'4.1', note:'Phase 2 — post-processing. three.js upgraded from r128 to 0.185.1 (pinned ES module build via importmap; the game script stays a classic script so inline handlers and globals are unchanged), with colour management and light intensities migrated to the modern API. Added pmndrs postprocessing: mipmap bloom at half resolution, a faint vignette, and a chromatic-aberration pulse that fires on a Yahtzee and scales with double/triple. Dice animation is now driven by elapsed time instead of frame count, so a roll takes the same wall-clock time regardless of frame rate. New Bloom & post toggle in settings.'},
   {v:'4.2', note:'Phase 3 — juice. Screen shake scaled to the moment (holding a die < scoring < Yahtzee), squash-and-settle as each die lands, and a burst of additive 3D sparks at the contact edge that the bloom picks up. Scoring now throws a spark burst out of the filled row and floats the points up, with callouts for the +100 extra-Yahtzee bonus and for crossing the upper bonus. The camera pushes in briefly on a Yahtzee. The celebration and scoring effects now share one particle pool instead of the celebration owning its own one-shot run. Three new toggles: Particles, Screen shake, and Juice.'},
   {v:'4.3', note:'Phase 4 — atmosphere and sound. An animated shader backdrop on its own small WebGL context: a slow drifting machine-shop grid that ripples when a category is scored and drifts from cold steel to warm forge as the card fills. Panels went slightly translucent so it reads behind the board. Web Audio sound, all synthesised so the app stays a single file — dice clatter on roll, a click on hold, a thunk as each die lands, a press on scoring and a forge hammer on a Yahtzee, each with a little random pitch so repeats do not sound cloned. Optional background music whose tempo climbs as the scorecard fills. Audio is created on the first tap, as iOS requires, and nothing is scheduled before that. Three new toggles: Backdrop, Sound and Music (music off by default).'},
+  {v:'4.4', note:'Shake the phone to roll. Off by default; enable it under Effects and set how hard you have to shake with the Shake sensitivity slider (1 = firm shake, 10 = light flick). Detection works from the change between accelerometer samples, so gravity cancels out and only real movement counts, with a debounce so one shake is one roll. It never fires mid-roll, after the third roll, or on the game-over screen. Also adds the iOS motion-permission request that was missing: the devicemotion listener was previously attached without one, so on iPhone it never fired — which means the tilt-slosh on the odds bars starts working again once permission is granted.'},
 ];
 
 function toggleVerLog(){
@@ -2348,16 +2354,79 @@ function renderScorecard(){
 var liquidState={}; // catId -> {level, vel, waveOff, flame}
 var gyroTilt=0; // -1 to 1, from device motion
 var gyroListening=false;
-function initGyro(){
-  if(gyroListening)return;
-  gyroListening=true;
-  if(window.DeviceMotionEvent){
-    window.addEventListener('devicemotion',function(e){
-      var g=e.accelerationIncludingGravity;
-      if(g)gyroTilt=Math.max(-1,Math.min(1,(g.x||0)/9.8));
-    });
+
+// ── Device motion: bar slosh + shake-to-roll ─────────────────────────────────
+// iOS 13+ will not deliver devicemotion at all until permission is granted,
+// and the request has to come from inside a user gesture. Previously the
+// listener was attached with no request, so on iPhone it silently never fired.
+var motionState={perm:'unknown',last:{x:0,y:0,z:0},lastT:0,energy:0,lastShake:0};
+
+function motionSupported(){return typeof DeviceMotionEvent!=='undefined';}
+function motionNeedsPermission(){
+  return motionSupported()&&typeof DeviceMotionEvent.requestPermission==='function';
+}
+
+// Sensitivity 1..10 -> how hard you have to shake. Low number = must be firm.
+function shakeThreshold(){
+  var sens=(currentSettings&&currentSettings.shakeSens)||5;
+  return 30-sens*2.2;
+}
+
+function onDeviceMotion(e){
+  var g=e.accelerationIncludingGravity;
+  if(!g)return;
+  // tilt still drives the liquid bars
+  gyroTilt=Math.max(-1,Math.min(1,(g.x||0)/9.8));
+  if(!fxOn('fxShakeRoll'))return;
+
+  var now=Date.now();
+  if(now-motionState.lastT<16)return;
+  motionState.lastT=now;
+
+  var L=motionState.last;
+  var dx=(g.x||0)-L.x,dy=(g.y||0)-L.y,dz=(g.z||0)-L.z;
+  L.x=g.x||0;L.y=g.y||0;L.z=g.z||0;
+  // Working from the change between samples rather than raw magnitude means
+  // gravity cancels itself out and only real movement registers.
+  var delta=Math.sqrt(dx*dx+dy*dy+dz*dz);
+  motionState.energy=motionState.energy*0.6+delta*0.4;
+
+  if(motionState.energy>shakeThreshold()&&now-motionState.lastShake>900){
+    motionState.lastShake=now;
+    motionState.energy=0;
+    shakeToRoll();
   }
 }
+
+function shakeToRoll(){
+  if(gameOver||rolling||rollCount>=MAX_ROLLS)return;   // never start a new game by accident
+  screenShake(5);
+  rollDice();
+}
+
+function attachMotion(){
+  if(gyroListening||!motionSupported())return;
+  gyroListening=true;
+  window.addEventListener('devicemotion',onDeviceMotion);
+}
+
+// Must be called from inside a tap on iOS. cb gets the resulting state.
+function requestMotion(cb){
+  if(!motionSupported()){motionState.perm='unsupported';if(cb)cb('unsupported');return;}
+  if(!motionNeedsPermission()){
+    motionState.perm='granted';attachMotion();
+    if(cb)cb('granted');return;
+  }
+  try{
+    DeviceMotionEvent.requestPermission().then(function(res){
+      motionState.perm=res;
+      if(res==='granted')attachMotion();
+      if(cb)cb(res);
+    })['catch'](function(){motionState.perm='denied';if(cb)cb('denied');});
+  }catch(e){motionState.perm='denied';if(cb)cb('denied');}
+}
+
+function initGyro(){attachMotion();}
 
 function animateRowCanvas(canvas,catId,targetLevel,isFlame,isGray){
   // targetLevel: number (gray/used) OR {green,yellow} (active odds) OR 0
@@ -2651,8 +2720,9 @@ var SETTINGS_KEY='yahtzee_settings_v2';
 // fx* keys are the effect-group toggles (1 = on). Each new effect phase adds
 // one here and one button in the settings panel so it can be A/B'd.
 var SETTINGS_DEFAULTS={rowHeight:32,headerSize:20,diceScale:100,diceGap:0,diceVshift:0,
-  fxLighting:1,fxPost:1,fxParticles:1,fxShake:1,fxJuice:1,fxBackground:1,fxSound:1,fxMusic:0};
-var FX_KEYS=['fxLighting','fxPost','fxParticles','fxShake','fxJuice','fxBackground','fxSound','fxMusic'];
+  fxLighting:1,fxPost:1,fxParticles:1,fxShake:1,fxJuice:1,fxBackground:1,fxSound:1,fxMusic:0,
+  fxShakeRoll:0,shakeSens:5};
+var FX_KEYS=['fxLighting','fxPost','fxParticles','fxShake','fxJuice','fxBackground','fxSound','fxMusic','fxShakeRoll'];
 function fxOn(key){return !!(currentSettings&&currentSettings[key]);}
 var currentSettings={};
 
@@ -2678,11 +2748,13 @@ function syncSliders(){
   document.getElementById('sl-dice-size').value=currentSettings.diceScale;
   document.getElementById('sl-dice-gap').value=currentSettings.diceGap;
   document.getElementById('sl-dice-vshift').value=currentSettings.diceVshift;
+  document.getElementById('sl-shake-sens').value=currentSettings.shakeSens;
   document.getElementById('lbl-row-height').textContent=currentSettings.rowHeight;
   document.getElementById('lbl-header').textContent=currentSettings.headerSize;
   document.getElementById('lbl-dice-size').textContent=currentSettings.diceScale;
   document.getElementById('lbl-dice-gap').textContent=currentSettings.diceGap;
   document.getElementById('lbl-dice-vshift').textContent=currentSettings.diceVshift;
+  document.getElementById('lbl-shake-sens').textContent=currentSettings.shakeSens;
   syncFxToggles();
 }
 function syncFxToggles(){
@@ -2694,6 +2766,22 @@ function syncFxToggles(){
 function toggleFx(key){
   currentSettings[key]=fxOn(key)?0:1;
   saveSettings(currentSettings);
+  if(key==='fxShakeRoll'&&currentSettings[key]){
+    requestMotion(function(res){
+      if(res!=='granted'){
+        // Permission refused or unavailable — don't leave a toggle on that
+        // cannot possibly work.
+        currentSettings.fxShakeRoll=0;
+        saveSettings(currentSettings);
+        syncFxToggles();
+        var btn=document.getElementById('tg-fxShakeRoll');
+        if(btn){
+          btn.textContent=res==='unsupported'?'No motion sensor':'Motion blocked';
+          setTimeout(function(){btn.textContent='Shake to roll';},2200);
+        }
+      }
+    });
+  }
   if(key==='fxMusic'){
     if(currentSettings[key]){unlockAudio();startMusic();}
     else stopMusic();
@@ -2715,7 +2803,8 @@ function applySettings(){
   var ds=+document.getElementById('sl-dice-size').value;
   var dg=+document.getElementById('sl-dice-gap').value;
   var dv=+document.getElementById('sl-dice-vshift').value;
-  var next={rowHeight:rh,headerSize:hs,diceScale:ds,diceGap:dg,diceVshift:dv};
+  var ss=+document.getElementById('sl-shake-sens').value;
+  var next={rowHeight:rh,headerSize:hs,diceScale:ds,diceGap:dg,diceVshift:dv,shakeSens:ss};
   // Carry the effect toggles through — the sliders don't own them.
   FX_KEYS.forEach(function(k){next[k]=currentSettings&&currentSettings[k]!==undefined?currentSettings[k]:SETTINGS_DEFAULTS[k];});
   currentSettings=next;
@@ -2726,6 +2815,7 @@ function applySettings(){
   document.getElementById('lbl-dice-size').textContent=ds;
   document.getElementById('lbl-dice-gap').textContent=dg;
   document.getElementById('lbl-dice-vshift').textContent=dv;
+  document.getElementById('lbl-shake-sens').textContent=ss;
   // Apply via CSS custom properties
   var root=document.documentElement;
   root.style.setProperty('--row-max-height',rh+'px');
@@ -2768,6 +2858,11 @@ window.__boot=function(){
   ['pointerdown','touchend','click'].forEach(function(ev){
     window.addEventListener(ev,unlockAudio,{once:true,passive:true});
   });
+  // The toggle persists across reloads, but the motion permission request
+  // still has to ride on a gesture, so re-ask on the first tap.
+  window.addEventListener('pointerdown',function(){
+    if(fxOn('fxShakeRoll'))requestMotion();
+  },{once:true,passive:true});
   newGame();
   // Show current version number
   var v=document.getElementById('app-ver');
