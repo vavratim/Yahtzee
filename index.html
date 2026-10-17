@@ -83,6 +83,16 @@ body{font-family:-apple-system,'SF Pro Display','Helvetica Neue',sans-serif;back
 .die-wrap:active{transform:scale(.86)}
 .die-wrap.rolling{opacity:1}/* Three.js handles roll animation */
 .held-ring{position:absolute;inset:-2px;border-radius:calc(var(--die) * .085);border:2px solid #40916c;pointer-events:none;z-index:2}
+/* Flat fallback die, drawn straight into the wrapper */
+.die-face{position:absolute;inset:0;width:100%;height:100%;z-index:1;
+  border-radius:calc(var(--die) * .085);
+  filter:drop-shadow(0 3px 5px rgba(0,0,0,.45))}
+.die-wrap.flat-rolling .die-face{animation:flatRoll .18s linear infinite}
+@keyframes flatRoll{
+  0%{transform:translateY(0) rotate(0deg)}
+  50%{transform:translateY(-6%) rotate(-4deg)}
+  100%{transform:translateY(0) rotate(0deg)}
+}
 /* One canvas for all five dice, behind the controls and the held rings */
 .dice-stage{position:absolute;left:0;top:0;pointer-events:none;z-index:1}
 .btn-swap{position:absolute;top:5px;left:5px;right:5px;width:calc(100% - 10px);background:rgba(255,255,255,.1);color:var(--text);border:none;border-radius:8px;padding:7px 0;font-size:22px;cursor:pointer;-webkit-appearance:none;z-index:2}
@@ -493,15 +503,13 @@ for(var _v=1;_v<=6;_v++)FACE_TO_VALUE[VALUE_TO_FACE[_v]]=_v;
 
 // Face textures only depend on (value, held), so there are just 14 of them.
 // Cache instead of rebuilding six canvases per die on every roll and hold.
-var PIP_TEX={};
-function pipTexture(value,isHeld){
-  var key=value+'_'+(isHeld?1:0);
-  if(PIP_TEX[key])return PIP_TEX[key];
-  var size=256;
-  var can=document.createElement('canvas');can.width=size;can.height=size;
-  var ctx=can.getContext('2d');
+// Draws one die face. Shared by the 3D face textures and by the flat
+// fallback renderer, so both show identical dice.
+function drawDieFace(ctx,size,value,isHeld){
   var r=size*0.12;
   var isEmpty=!(value>0);
+  ctx.clearRect(0,0,size,size);
+  ctx.save();
   if(isEmpty)ctx.globalAlpha=0.25;
   ctx.fillStyle=isHeld?'#183d2c':'#f0e8d0';
   // Rounded rect
@@ -524,6 +532,16 @@ function pipTexture(value,isHeld){
       ctx.fillStyle=pipColor;ctx.fill();
     });
   }
+  ctx.restore();
+}
+
+var PIP_TEX={};
+function pipTexture(value,isHeld){
+  var key=value+'_'+(isHeld?1:0);
+  if(PIP_TEX[key])return PIP_TEX[key];
+  var size=256;
+  var can=document.createElement('canvas');can.width=size;can.height=size;
+  drawDieFace(can.getContext('2d'),size,value,isHeld);
   var tex=new THREE.CanvasTexture(can);
   tex.colorSpace=THREE.SRGBColorSpace;
   tex.anisotropy=4;
@@ -580,6 +598,62 @@ function initThreeConsts(){
   DIE_GEO=new THREE.BoxGeometry(1,1,1);
 }
 
+
+// ── Flat (no-3D) dice ────────────────────────────────────────────────────────
+// Used when three.js never arrives — CDN unreachable with nothing cached, or
+// WebGL unavailable. The scorecard is plain DOM and does not need three.js, so
+// the game stays fully playable; only the tumbling 3D dice are lost.
+var FLAT_MODE=false;
+
+function goFlat(why){
+  if(FLAT_MODE)return;
+  FLAT_MODE=true;
+  try{console.warn('Yahtzee: falling back to flat dice ('+why+')');}catch(e){}
+  var badge=document.getElementById('app-ver');
+  if(badge&&badge.textContent&&badge.textContent.indexOf('2D')<0)badge.textContent+=' · 2D';
+  if(typeof render==='function'&&scores)render();
+}
+
+// Paint a die face into its wrapper at the wrapper's current size.
+function paintFlatDie(origIdx,value,isHeld){
+  var w=diceWraps[origIdx];
+  if(!w)return;
+  var cv=w.querySelector('canvas.die-face');
+  if(!cv){
+    cv=document.createElement('canvas');
+    cv.className='die-face';
+    w.insertBefore(cv,w.firstChild);
+  }
+  var css=w.clientWidth||72;
+  var dpr=Math.min(window.devicePixelRatio||1,2);
+  var px=Math.max(32,Math.round(css*dpr));
+  if(cv.width!==px){cv.width=px;cv.height=px;}
+  drawDieFace(cv.getContext('2d'),px,value,isHeld);
+}
+
+function repaintFlatDice(){
+  if(!FLAT_MODE)return;
+  for(var i=0;i<5;i++)paintFlatDie(i,dice?dice[i]:0,held?held[i]:false);
+}
+
+// Stand-in for the 3D tumble: riffle through faces, then settle and hand back
+// to the caller exactly like rollDieTo does, so the turn still completes.
+function flatRollDie(origIdx,newValue,onDone){
+  var w=diceWraps[origIdx];
+  if(w)w.classList.add('flat-rolling');
+  var start=Date.now(),dur=420+Math.random()*180;
+  (function spin(){
+    var t=Date.now()-start;
+    if(t<dur){
+      paintFlatDie(origIdx,1+((Math.random()*6)|0),false);
+      setTimeout(spin,60);
+      return;
+    }
+    paintFlatDie(origIdx,newValue,false);
+    if(w)w.classList.remove('flat-rolling');
+    if(onDone)onDone();
+  })();
+}
 
 // ── Dice sparks ──────────────────────────────────────────────────────────────
 // A fixed pool of additively-blended points inside the dice scene, so landing
@@ -690,8 +764,12 @@ function pulseAberration(strength){
 }
 
 function initDiceStage(){
+  if(FLAT_MODE)return null;
   if(stage)return stage;
-  initThreeConsts();
+  if(typeof THREE==='undefined'){goFlat('three.js unavailable');return null;}
+  try{
+    initThreeConsts();
+  }catch(e){goFlat('three init failed');return null;}
   var panel=document.getElementById('dice-panel');
   if(!panel)return null;
 
@@ -699,7 +777,14 @@ function initDiceStage(){
   canvas.className='dice-stage';
   panel.appendChild(canvas);
 
-  var renderer=new THREE.WebGLRenderer({canvas:canvas,antialias:true,alpha:true});
+  var renderer;
+  try{
+    renderer=new THREE.WebGLRenderer({canvas:canvas,antialias:true,alpha:true});
+  }catch(e){
+    if(canvas.parentNode)canvas.parentNode.removeChild(canvas);
+    goFlat('WebGL unavailable');
+    return null;
+  }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
   renderer.setClearColor(0x000000,0);
   renderer.outputColorSpace=THREE.SRGBColorSpace;
@@ -772,6 +857,7 @@ function ensureDie(i){
 
 // Point the six faces at the cached textures for this value/held combination.
 function setDieFaces(i,value,isHeld){
+  if(FLAT_MODE){paintFlatDie(i,value,isHeld);return;}
   var mesh=ensureDie(i);if(!mesh)return;
   var isEmpty=!(value>0);
   var lighting=fxOn('fxLighting');
@@ -1034,13 +1120,16 @@ function fitDice(){
   root.style.setProperty('--die',(slot-1).toFixed(1)+'px');
   root.style.setProperty('--slot-squeeze',(gap/2).toFixed(1)+'px');
   requestAnimationFrame(resizeDiceRenderers);
+  if(FLAT_MODE)requestAnimationFrame(repaintFlatDice);
 }
 window.addEventListener('resize',fitDice);
 window.addEventListener('orientationchange',function(){setTimeout(fitDice,150)});
 
 function rollDieTo(origIdx,newValue,onDone){
+  if(FLAT_MODE){flatRollDie(origIdx,newValue,onDone);return;}
   var mesh=threeCubes[origIdx];
-  if(!mesh)return;
+  // No mesh means no stage: finish the roll anyway or the turn would hang.
+  if(!mesh){if(onDone)onDone();return;}
   // Faces are per-value textures, so this just makes sure the die is showing
   // the full (unheld) pip set before it tumbles.
   setDieFaces(origIdx,newValue,false);
@@ -1050,6 +1139,7 @@ function rollDieTo(origIdx,newValue,onDone){
 }
 
 function updateDieHeld(origIdx,isHeld,value){
+  if(FLAT_MODE){paintFlatDie(origIdx,value,isHeld);return;}
   if(!threeCubes[origIdx])return;
   setDieFaces(origIdx,value,isHeld);
 }
@@ -2168,6 +2258,7 @@ var VERSION_LOG=[
   {v:'4.3', note:'Phase 4 — atmosphere and sound. An animated shader backdrop on its own small WebGL context: a slow drifting machine-shop grid that ripples when a category is scored and drifts from cold steel to warm forge as the card fills. Panels went slightly translucent so it reads behind the board. Web Audio sound, all synthesised so the app stays a single file — dice clatter on roll, a click on hold, a thunk as each die lands, a press on scoring and a forge hammer on a Yahtzee, each with a little random pitch so repeats do not sound cloned. Optional background music whose tempo climbs as the scorecard fills. Audio is created on the first tap, as iOS requires, and nothing is scheduled before that. Three new toggles: Backdrop, Sound and Music (music off by default).'},
   {v:'4.4', note:'Shake the phone to roll. Off by default; enable it under Effects and set how hard you have to shake with the Shake sensitivity slider (1 = firm shake, 10 = light flick). Detection works from the change between accelerometer samples, so gravity cancels out and only real movement counts, with a debounce so one shake is one roll. It never fires mid-roll, after the third roll, or on the game-over screen. Also adds the iOS motion-permission request that was missing: the devicemotion listener was previously attached without one, so on iPhone it never fired — which means the tilt-slosh on the odds bars starts working again once permission is granted.'},
   {v:'4.5', note:'Service worker added, so the app installs properly and works with no connection — verified playing a full turn offline. The page is fetched network-first, so a new build lands as soon as the phone is online; icons, the manifest and the pinned three.js and postprocessing modules are served from cache. Bumping VERSION in sw.js names a new cache and deletes the old one. When an update installs, a tap-to-reload prompt appears rather than reloading by itself, since a reload mid-game would throw away the scorecard.'},
+  {v:'4.6', note:'Flat-dice fallback. If three.js never loads — CDN unreachable with nothing cached, or WebGL unavailable — the game now starts anyway with dice drawn as plain 2D faces instead of showing an empty board. The faces come from the same drawing code as the 3D textures, so they match. Rolling, holding, scoring, the scorecard, the odds bars, sound, the backdrop and the particle and score-text effects all still work; only the tumbling 3D dice are lost. The version badge shows a 2D marker when the fallback is active.'},
 ];
 
 function toggleVerLog(){
@@ -2877,11 +2968,22 @@ window.__boot=function(){
   newGame();
   // Show current version number
   var v=document.getElementById('app-ver');
-  if(v&&VERSION_LOG&&VERSION_LOG.length)v.textContent='v'+VERSION_LOG[VERSION_LOG.length-1].v;
+  if(v&&VERSION_LOG&&VERSION_LOG.length){
+    // __boot can run after goFlat, so the marker is applied here rather than
+    // in goFlat, where it would just be overwritten.
+    v.textContent='v'+VERSION_LOG[VERSION_LOG.length-1].v+(FLAT_MODE?' · 2D':'');
+  }
   // Apply saved settings after first render
   setTimeout(function(){syncSliders();applySettings()},50);
 };
 if(window.__threeReady)window.__boot();
+// If the module shim never lands — CDN unreachable and nothing cached, or an
+// import error — start anyway with flat dice rather than showing a dead board.
+setTimeout(function(){
+  if(window.__booted)return;
+  goFlat('module load timed out');
+  window.__boot();
+},4000);
 
 // ── Service worker ───────────────────────────────────────────────────────────
 // Registered independently of the 3D boot, so the app is still installed and

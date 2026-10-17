@@ -10,7 +10,7 @@
  *   - everything else (icons, manifest, the pinned CDN modules) is immutable
  *     for a given version, so it is served cache-first.
  */
-const VERSION = '4.5';
+const VERSION = '4.6';
 const CACHE = 'yahtzee-' + VERSION;
 
 // Same-origin files the app cannot start without.
